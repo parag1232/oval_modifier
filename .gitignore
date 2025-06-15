@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+.env
+.venv
+venv/
+build/
+dist/
+*.sqlite3
+*.db
+.DS_Store
+*.xml
+# VSCode
+.vscode/
+data/
+misc/
+# React/Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# Misc
+*.bak
+*.swp
+*.tmp
+
+# Ignore output JSONs
+*.json
+!frontend/src/**/*.json
+!backend/**/*.json
