@@ -24,6 +24,18 @@ def initialize_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS regex_issues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_id TEXT,
+        definition_id TEXT,
+        object_id TEXT,
+        pattern TEXT,
+        reason TEXT,
+        FOREIGN KEY (rule_id) REFERENCES rules(rule_id)
+    )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -36,6 +48,21 @@ def insert_rule(benchmark, rule_id, definition_id, oval_path, supported=None, un
     (benchmark, rule_id, definition_id, oval_path, supported, unsupported_probes, manual,benchmark_type)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (benchmark, rule_id, definition_id, oval_path, supported, unsupported_probes, manual,benchmark_type))
+
+    conn.commit()
+    conn.close()
+
+
+
+def insert_regex_issue(rule_id, definition_id, object_id, pattern, reason):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT INTO regex_issues 
+    (rule_id, definition_id, object_id, pattern, reason)
+    VALUES (?, ?, ?, ?, ?)
+    """, (rule_id, definition_id, object_id, pattern, reason))
 
     conn.commit()
     conn.close()

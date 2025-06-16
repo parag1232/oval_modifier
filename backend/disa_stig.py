@@ -3,7 +3,7 @@ import json
 import os
 from backend.oval_analyzer import OvalAnalyzer
 from backend.oval_parser import OvalDSA
-from backend.database import insert_rule
+from backend.database import insert_rule,insert_regex_issue
 from lxml import etree as lxml_etree
 
 NAMESPACES = {
@@ -116,33 +116,47 @@ def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
     ben_platform = detect_benchmark_type_from_roots(xccdf_root, oval_root)
     dsa = OvalDSA(oval_bytes)
     x = OvalAnalyzer(dsa)
-    analysis_results = x.analyze(ben_platform)
     ovals_dir = os.path.join(benchmark_dir, "ovals")
     os.makedirs(ovals_dir, exist_ok=True)
 
     for rule_id, definition_id in xccdf_to_oval_def.items():
         try:
 
-            # if rule_id != "xccdf_mil.disa.stig_rule_SV-238353r991562_rule":
-            #     continue
             temp_dsa = OvalDSA(oval_bytes)
             temp_dsa.keep_only_definition(definition_id)
             output_bytes = temp_dsa.to_xml_bytes()
 
-            # Format using lxml for pretty print
-            
             lxml_tree = lxml_etree.parse(output_bytes)
             out_path = os.path.join(ovals_dir, f"{rule_id}.xml")
             lxml_tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
 
             print(f"✅ Extracted OVAL for rule: {rule_id}")
 
-            # Insert into DB
-            if analysis_results[definition_id]['supported']:
-                insert_rule(benchmark_name, rule_id, definition_id, out_path,supported=1, unsupported_probes=None, manual=False,benchmark_type=benchmark_type)
-            else:
-                unsupported_probes = analysis_results[definition_id]['unsupported_types']
-                insert_rule(benchmark_name, rule_id, definition_id, out_path, supported=0, unsupported_probes=json.dumps(unsupported_probes), manual=False,benchmark_type=benchmark_type)       
+            # Run analyzers for this rule
+            analyzer = OvalAnalyzer(temp_dsa)
+            analysis_results = analyzer.analyze(ben_platform)
+            regex_results = analyzer.analyze_regex()
+
+            rule_supported = analysis_results[definition_id]['supported']
+            unsupported_probes = analysis_results[definition_id]['unsupported_types']
+
+            insert_rule(
+                benchmark_name, rule_id, definition_id, out_path,
+                supported=1 if rule_supported else 0,
+                unsupported_probes=None if rule_supported else json.dumps(unsupported_probes),
+                manual=False,
+                benchmark_type=benchmark_type
+            )
+
+            # Now insert regex issues for this rule
+            for regex_issue in regex_results:
+                insert_regex_issue(
+                    rule_id,
+                    str(regex_issue['definition_id']),
+                    regex_issue['node_id'],
+                    regex_issue['regex'],
+                    regex_issue['reason']
+                )
 
         except Exception as e:
             print(f"⚠ Failed to extract OVAL for rule {rule_id}: {e}")

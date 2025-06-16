@@ -1,3 +1,5 @@
+import re
+
 WIN_SUPPORTED_PROBES = {
     "registry_object", "win-def:registry_object", "windows-def:registry_object",
     "file_object", "auditeventpolicysubcategories_object", "family_object",
@@ -18,11 +20,21 @@ MAC_SUPPORTED_PROBES = {
     "userdefaults_object", "file_object"
 }
 
+# Regex patterns you provided
+REGEXES_TO_REMOVE = {
+    "h_space": re.compile(r"\\h"),
+    "word_boundary": re.compile(r"\\b"),
+    "lookahead_positive": re.compile(r"\(\?="),
+    "lookahead_negative": re.compile(r"\(\?!"),
+    "lookbehind_positive": re.compile(r"\(\?<="),
+    "lookbehind_negative": re.compile(r"\(\?<!")
+}
+
 class OvalAnalyzer:
     def __init__(self, oval_dsa):
         self.dsa = oval_dsa
 
-    def analyze(self,benchmark_type=None):
+    def analyze(self, benchmark_type=None):
         analysis_results = {}
 
         for node_id, node in self.dsa.nodes.items():
@@ -30,12 +42,12 @@ class OvalAnalyzer:
                 continue
 
             object_types = self._extract_object_types(node_id)
-            if str.lower(benchmark_type) == "linux":
+            if str.lower(benchmark_type or "") == "linux":
                 unsupported = [obj for obj in object_types if obj not in LINUX_SUPPORTED_PROBES]
-            elif str.lower(benchmark_type) == "macos":
+            elif str.lower(benchmark_type or "") == "macos":
                 unsupported = [obj for obj in object_types if obj not in MAC_SUPPORTED_PROBES]
             else:
-                unsupported = [obj for obj in object_types if obj not in WIN_SUPPORTED_PROBES]        
+                unsupported = [obj for obj in object_types if obj not in WIN_SUPPORTED_PROBES]
             supported = len(unsupported) == 0
 
             analysis_results[node_id] = {
@@ -45,6 +57,31 @@ class OvalAnalyzer:
             }
 
         return analysis_results
+    
+    def get_definition_ids(self, node_id):
+        visited = set()
+        definitions = set()
+        stack = [node_id]
+
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+
+            for parent_id in self.dsa.reverse_refs.get(current, []):
+                parent_node = self.dsa.nodes.get(parent_id)
+                if not parent_node:
+                    continue
+
+                if parent_node.type == "definition":
+                    definitions.add(parent_id)
+                    stack.append(parent_id)  # 🔥 KEY: keep walking for extend_definition chains
+
+                else:
+                    stack.append(parent_id)
+        return definitions
+
 
     def _extract_object_types(self, definition_id):
         object_types = set()
@@ -68,3 +105,28 @@ class OvalAnalyzer:
 
         traverse(definition_id)
         return object_types
+
+    # NEW REGEX ANALYZER
+    def analyze_regex(self):
+        regex_results = []
+
+        for node_id, node in self.dsa.nodes.items():
+            if node.type not in ["object", "state"]:
+                continue
+
+            for elem in node.element.findall(".//*[@operation='pattern match']"):
+                pattern_text = elem.text
+                if not pattern_text:
+                    continue
+
+                for reason, pattern in REGEXES_TO_REMOVE.items():
+                    if pattern.search(pattern_text):
+                        regex_results.append({
+                            "node_id": node_id,
+                            "definition_id": self.get_definition_ids(node_id),
+                            "regex": pattern_text,
+                            "reason": reason
+                        })
+
+        return regex_results
+

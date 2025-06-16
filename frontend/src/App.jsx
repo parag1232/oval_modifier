@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import UploadPage from "./pages/UploadPage";
 import BenchmarkListPage from "./pages/BenchmarkListPage";
 import RuleBrowserPage from "./pages/RuleBrowserPage";
+import RegexIssuesPage from "./pages/RegexIssuesPage"; 
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/" element={<BenchmarkListPage />} />
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/rules/:benchmark" element={<RuleBrowserPage />} />
+        <Route path="/regex-issues/:benchmark" element={<RegexIssuesPage />} />
       </Routes>
     </BrowserRouter>
   );

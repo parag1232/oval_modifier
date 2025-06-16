@@ -81,3 +81,10 @@ export async function downloadFullBenchmarkOval(benchmark) {
   link.click();
   window.URL.revokeObjectURL(url);
 }
+
+export async function getRegexIssues(benchmark) {
+  const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/regex-issues`);
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  return text;
+}

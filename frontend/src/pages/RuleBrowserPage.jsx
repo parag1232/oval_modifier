@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams,useNavigate} from "react-router-dom";
 import { getRules, deleteRules, downloadMergedOval,getOval,downloadSingleRuleOval } from "../api/api";
 
 function Modal({ open, onClose, title, children }) {
@@ -26,6 +26,7 @@ function RuleBrowserPage() {
   const [selected, setSelected] = useState([]);
   const [sortAsc, setSortAsc] = useState(true);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
+  const navigate = useNavigate();
 
   const fetchRules = () => {
     getRules(benchmark).then(setRules);
@@ -124,7 +125,15 @@ function RuleBrowserPage() {
         >
           Download Merged OVAL
         </button>
+        <button
+        className="bg-purple-600 text-white px-4 py-2 rounded"
+        onClick={() => navigate(`/regex-issues/${benchmark}`)}
+      >
+        Unsupported Regex
+      </button>
       </div>
+
+      
 
       <table className="border border-gray-300 w-full">
         <thead className="bg-gray-200">

@@ -281,3 +281,33 @@ async def get_rule_oval(benchmark: str, rule_id: str):
     with open(oval_path, "r", encoding="utf-8") as f:
         content = f.read()
     return JSONResponse({"rule_id": rule_id, "oval": content})
+
+
+
+
+@app.get("/api/benchmarks/{benchmark}/regex-issues")
+async def get_regex_issues(benchmark: str):
+    conn = sqlite3.connect("data/stig.db")
+    cursor = conn.cursor()
+
+    query = """
+    SELECT ri.pattern
+    FROM regex_issues ri
+    JOIN rules r ON ri.rule_id = r.rule_id
+    WHERE r.benchmark = ?
+    ORDER BY r.rule_id, ri.id
+    """
+    cursor.execute(query, (benchmark,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Generate simple tab-separated output
+    output_lines = []
+    for pattern in rows:
+        output_lines.append(f"{pattern[0]}")
+
+    output_lines = (set(output_lines))    
+
+    response_text = "\n".join(output_lines)
+
+    return PlainTextResponse(response_text, media_type="text/plain")
