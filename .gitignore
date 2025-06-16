@@ -36,6 +36,6 @@ Thumbs.db
 *.tmp
 
 # Ignore output JSONs
-*.json
+# *.json
 !frontend/src/**/*.json
 !backend/**/*.json
