@@ -5,6 +5,14 @@ from backend.oval_analyzer import OvalAnalyzer
 from backend.oval_parser import OvalDSA
 from backend.database import insert_rule,insert_regex_issue
 from lxml import etree as lxml_etree
+from backend.sensorbin_generator import generate_instructions, generate_sensor_cf
+import datetime
+
+
+PYTHON_PATH = os.getenv("PYTHON_PATH")
+BUILD_CHANNEL_FILE = os.getenv("BUILD_CHANNEL_FILE")
+GENERATE_INSTRUCTIONS = os.getenv("GENERATE_INSTRUCTIONS_FILE")
+REQUEST_PARAM = os.getenv("REQUEST_PARAM_FILE")
 
 NAMESPACES = {
     'scap': 'http://scap.nist.gov/schema/scap/source/1.2',
@@ -131,6 +139,19 @@ def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
             lxml_tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
 
             print(f"✅ Extracted OVAL for rule: {rule_id}")
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            generate_instructions(GENERATE_INSTRUCTIONS, REQUEST_PARAM, out_path, timestamp)
+
+            sensorbin_dir = os.path.join(benchmark_dir, "sensorbin")
+            os.makedirs(sensorbin_dir, exist_ok=True)
+
+            sensor_bin_file = generate_sensor_cf(
+            PYTHON_PATH, 
+            BUILD_CHANNEL_FILE, 
+            f"cf.{timestamp}.bin.txt", 
+            timestamp,
+            sensorbin_dir
+            )
 
             # Run analyzers for this rule
             analyzer = OvalAnalyzer(temp_dsa)
