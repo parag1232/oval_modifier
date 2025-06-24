@@ -247,10 +247,10 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
 async def list_rules(benchmark: str):
     conn = sqlite3.connect("data/stig.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT rule_id, supported FROM rules WHERE benchmark=? AND excluded=0", (benchmark,))
+    cursor.execute("SELECT rule_id, supported, sensor_file_generated FROM rules WHERE benchmark=? AND excluded=0", (benchmark,))
     rows = cursor.fetchall()
     conn.close()
-    return [{"rule_id": row[0], "supported": bool(row[1]) if row[1] is not None else False} for row in rows]
+    return [{"rule_id": row[0], "supported": bool(row[1]) if row[1] is not None else False,"sensor_file_generated":bool(row[2]) if row[2] is not None else False} for row in rows]
 
 
 @app.delete("/api/benchmarks/{benchmark}")

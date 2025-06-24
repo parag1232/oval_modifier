@@ -146,6 +146,12 @@ function RuleBrowserPage() {
             >
               Supported {sortAsc ? "▲" : "▼"}
             </th>
+            <th
+              className="px-4 py-2 border cursor-pointer"
+              onClick={() => setSortAsc(!sortAsc)}
+            >
+              Sensor File Status {sortAsc ? "▲" : "▼"}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -164,6 +170,13 @@ function RuleBrowserPage() {
                   <span className="text-green-600 font-semibold">Supported ✅</span>
                 ) : (
                   <span className="text-red-600 font-semibold">Unsupported ❌</span>
+                )}
+              </td>
+              <td className="px-4 py-2 border">
+                {rule.sensor_file_generated ? (
+                  <span className="text-green-600 font-semibold">Generated ✅</span>
+                ) : (
+                  <span className="text-red-600 font-semibold">Not Generated ❌</span>
                 )}
               </td>
               <td className="px-4 py-2 border">
