@@ -4,12 +4,19 @@ import subprocess
 import os
 import shutil
 
-def generate_instructions(generate_instructions_path, request_param_path, oval_file_path, timestamp):
-    subprocess.run([generate_instructions_path, request_param_path, oval_file_path], check=True)
+def generate_instructions(generate_instructions_path, request_param_path, oval_file_path, output_path, timestamp):
+    subprocess.run([
+        generate_instructions_path,
+        request_param_path,
+        oval_file_path,
+        output_path,
+        timestamp
+    ], check=True)
 
     output_file = f"cf.{timestamp}.bin.txt"
-    shutil.copy("cf.bin", output_file)
+    shutil.copy(os.path.join(output_path, "cf.bin"), output_file)
     return output_file
+
 
 def generate_sensor_cf(python_path, build_channel_file_path, instructions_file, timestamp, output_dir):
     cwd = os.getcwd()

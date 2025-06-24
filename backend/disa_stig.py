@@ -3,16 +3,15 @@ import json
 import os
 from backend.oval_analyzer import OvalAnalyzer
 from backend.oval_parser import OvalDSA
-from backend.database import insert_rule,insert_regex_issue
+from backend.database import insert_rule, insert_regex_issue,update_sensor_status
 from lxml import etree as lxml_etree
-from backend.sensorbin_generator import generate_instructions, generate_sensor_cf
-import datetime
-
+from backend.sensorbin_generator import *
+from datetime import datetime
 
 PYTHON_PATH = os.getenv("PYTHON_PATH")
 BUILD_CHANNEL_FILE = os.getenv("BUILD_CHANNEL_FILE")
-GENERATE_INSTRUCTIONS = os.getenv("GENERATE_INSTRUCTIONS_FILE")
-REQUEST_PARAM = os.getenv("REQUEST_PARAM_FILE")
+GENERATE_INSTRUCTIONS = os.getenv("GENERATE_INSTRUCTIONS_LOCATION")
+REQUEST_PARAM = os.getenv("REQUEST_PARAM_FILE_LOCATION")
 
 NAMESPACES = {
     'scap': 'http://scap.nist.gov/schema/scap/source/1.2',
@@ -21,6 +20,24 @@ NAMESPACES = {
     'cpe-dict': 'http://cpe.mitre.org/dictionary/2.0',
     'xlink': 'http://www.w3.org/1999/xlink'
 }
+
+def generate_sensor_for_rule(benchmark, benchmark_dir, rule_id, definition_id, oval_path):
+    try:
+        cf_output = os.path.join(benchmark_dir, "cf_output")
+        os.makedirs(cf_output, exist_ok=True)
+        cf_output = os.path.abspath(cf_output)
+
+        sensorbin_dir = os.path.join(benchmark_dir, "sensorbin")
+        os.makedirs(sensorbin_dir, exist_ok=True)
+
+        instructions_file = generate_instructions(GENERATE_INSTRUCTIONS, REQUEST_PARAM, oval_path, cf_output, rule_id)
+        generate_sensor_cf(PYTHON_PATH, BUILD_CHANNEL_FILE, instructions_file, rule_id, sensorbin_dir)
+
+        update_sensor_status(rule_id, benchmark, True)
+        print(f"✅ Sensor generated for rule: {rule_id}")
+    except Exception as e:
+        update_sensor_status(rule_id, benchmark, False)
+        print(f"❌ Sensor generation failed for rule {rule_id}: {e}")
 
 def detect_benchmark_type_from_roots(xccdf_root, oval_root) -> str:
     platforms = []
@@ -52,7 +69,7 @@ def detect_benchmark_type_from_roots(xccdf_root, oval_root) -> str:
         return 'Mac'
     else:
         return 'Unknown'
-    
+
 def extract_component(tree, comp_id):
     return tree.find(f".//scap:component[@id='{comp_id}']", namespaces=NAMESPACES)
 
@@ -62,9 +79,9 @@ def write_xml(root, filename, output_dir):
         etree.ElementTree(root).write(out_path, pretty_print=True, encoding='utf-8', xml_declaration=True)
         print(f"✅ Saved: {out_path}")
     else:
-        print(f"⚠️  Skipped: {filename} not found")
+        print(f"⚠️ Skipped: {filename} not found")
 
-def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
+def parse_stig(file_path, benchmark_dir, benchmark_name, benchmark_type):
     print(f"🔍 Parsing: {file_path}")
     tree = etree.parse(file_path)
     root = tree.getroot()
@@ -126,10 +143,10 @@ def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
     x = OvalAnalyzer(dsa)
     ovals_dir = os.path.join(benchmark_dir, "ovals")
     os.makedirs(ovals_dir, exist_ok=True)
+    generated_rules = []
 
     for rule_id, definition_id in xccdf_to_oval_def.items():
         try:
-
             temp_dsa = OvalDSA(oval_bytes)
             temp_dsa.keep_only_definition(definition_id)
             output_bytes = temp_dsa.to_xml_bytes()
@@ -140,18 +157,6 @@ def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
 
             print(f"✅ Extracted OVAL for rule: {rule_id}")
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            generate_instructions(GENERATE_INSTRUCTIONS, REQUEST_PARAM, out_path, timestamp)
-
-            sensorbin_dir = os.path.join(benchmark_dir, "sensorbin")
-            os.makedirs(sensorbin_dir, exist_ok=True)
-
-            sensor_bin_file = generate_sensor_cf(
-            PYTHON_PATH, 
-            BUILD_CHANNEL_FILE, 
-            f"cf.{timestamp}.bin.txt", 
-            timestamp,
-            sensorbin_dir
-            )
 
             # Run analyzers for this rule
             analyzer = OvalAnalyzer(temp_dsa)
@@ -179,5 +184,12 @@ def parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type):
                     regex_issue['reason']
                 )
 
+            generated_rules.append({
+                "rule_id": rule_id,
+                "definition_id": definition_id,
+                "oval_path": out_path
+            })    
+
         except Exception as e:
             print(f"⚠ Failed to extract OVAL for rule {rule_id}: {e}")
+            continue

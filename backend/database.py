@@ -20,6 +20,7 @@ def initialize_db():
         manual INTEGER,
         excluded INTEGER DEFAULT 0,
         benchmark_type TEXT,
+        sensor_file_generated INTEGER DEFAULT 0,
         UNIQUE (benchmark, rule_id)
     )
     """)
@@ -66,3 +67,13 @@ def insert_regex_issue(rule_id, definition_id, object_id, pattern, reason):
 
     conn.commit()
     conn.close()
+
+
+def update_sensor_status(rule_id, benchmark, status: bool):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE rules SET sensor_file_generated=? WHERE rule_id=? AND benchmark=?
+    """, (1 if status else 0, rule_id, benchmark))
+    conn.commit()
+    conn.close()   
