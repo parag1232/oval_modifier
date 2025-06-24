@@ -21,13 +21,22 @@ app.add_middleware(
 )
 
 def deepcopy_with_ns(elem):
-    new_elem = ET.Element(elem.tag)
+    uri, tag = elem.tag[1:].split('}', 1) if elem.tag.startswith('{') else ("", elem.tag)
+    new_elem = ET.Element(f"{{{uri}}}{tag}") if uri else ET.Element(tag)
+
     for key, val in elem.attrib.items():
         new_elem.set(key, val)
+
     new_elem.text = elem.text
     new_elem.tail = elem.tail
+
     for child in elem:
         new_elem.append(deepcopy_with_ns(child))
+
+    # Force xmlns on <set> elements
+    if tag == "set" and "xmlns" not in new_elem.attrib:
+        new_elem.set("xmlns", "http://oval.mitre.org/XMLSchema/oval-definitions-5")
+
     return new_elem
 
 def normalize_namespaces_to_default(elem, target_ns):
@@ -152,6 +161,15 @@ class OvalDSA:
             for filter_elem in set_elem.findall("{http://oval.mitre.org/XMLSchema/oval-definitions-5}filter"):
                 state_id = filter_elem.text.strip()
                 if state_id:
+                    self.nodes[obj_id].children.add(state_id)
+                    self.reverse_refs[state_id].add(obj_id)
+                    self._process_state(state_id)
+
+        # ✅ NEW: also parse <filter> tags outside <set>
+        for filter_elem in obj_elem.findall(".//*"):
+            if filter_elem.tag.endswith("filter"):
+                state_id = filter_elem.text.strip()
+                if state_id and state_id in self.element_by_id:
                     self.nodes[obj_id].children.add(state_id)
                     self.reverse_refs[state_id].add(obj_id)
                     self._process_state(state_id)
