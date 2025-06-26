@@ -46,7 +46,10 @@ def detect_benchmark_type_from_roots(xccdf_root, oval_root) -> str:
     if xccdf_root is not None:
         for platform_elem in xccdf_root.findall(".//xccdf:platform", namespaces=NAMESPACES):
             platform_text = platform_elem.text
-            if platform_text:
+            if platform_text is not None:
+                platforms.append(platform_text.lower())
+            else:
+                platform_text = platform_elem.attrib['idref']
                 platforms.append(platform_text.lower())
 
     # Extract from OVAL
@@ -80,6 +83,92 @@ def write_xml(root, filename, output_dir):
         print(f"✅ Saved: {out_path}")
     else:
         print(f"⚠️ Skipped: {filename} not found")
+        
+def parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name,benchmark_type):
+    xccdf_root = etree.parse(xccdf_path)
+    oval_root = etree.parse(oval_path)
+    xccdf_to_oval_def = {}
+    if xccdf_root is not None:
+        for rule in xccdf_root.findall(".//xccdf:Rule", namespaces=NAMESPACES):
+            rule_id = rule.get("id")
+            check_ref = rule.findall(".//xccdf:check/xccdf:check-content-ref", namespaces=NAMESPACES)
+            if check_ref is not None:
+                if len(check_ref) > 1:
+                    for i,check in enumerate(check_ref):
+                        href = check.get("name")
+                        if href:
+                            xccdf_to_oval_def[rule_id+"_"+str(i)] = href
+                elif len(check_ref) == 0:
+                      xccdf_to_oval_def[rule_id] = "Manual Rule"          
+                else:            
+                    href = check_ref[0].get("name")
+                    if href is None:
+                        href = check_ref[0].get("href")
+                    xccdf_to_oval_def[rule_id] = href
+
+    with open(os.path.join(benchmark_dir, "xccdf_to_oval_definition_map.json"), "w", encoding="utf-8") as f:
+        json.dump(xccdf_to_oval_def, f, indent=2)
+        print(f"✅ Saved: {benchmark_dir}/xccdf_to_oval_definition_map.json")
+    with open(oval_path, "rb") as f:
+        oval_bytes = f.read()                
+    ben_platform = detect_benchmark_type_from_roots(xccdf_root, oval_root)
+    ovals_dir = os.path.join(benchmark_dir, "ovals")
+    os.makedirs(ovals_dir, exist_ok=True)
+    generated_rules = []
+
+    for rule_id, definition_id in xccdf_to_oval_def.items():
+        try:
+            if "sce/" in definition_id:
+                # Skip SCE rules
+                print(f"⚠ Skipping SCE rule because of script: {rule_id}")
+                continue
+            temp_dsa = OvalDSA(oval_bytes)
+            temp_dsa.keep_only_definition(definition_id)
+            output_bytes = temp_dsa.to_xml_bytes()
+
+            lxml_tree = lxml_etree.parse(output_bytes)
+            out_path = os.path.join(ovals_dir, f"{rule_id}.xml")
+            lxml_tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
+
+            print(f"✅ Extracted OVAL for rule: {rule_id}")
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+            # Run analyzers for this rule
+            analyzer = OvalAnalyzer(temp_dsa)
+            analysis_results = analyzer.analyze(ben_platform)
+            regex_results = analyzer.analyze_regex()
+
+            rule_supported = analysis_results[definition_id]['supported']
+            unsupported_probes = analysis_results[definition_id]['unsupported_types']
+
+            insert_rule(
+                benchmark_name, rule_id, definition_id, out_path,
+                supported=1 if rule_supported else 0,
+                unsupported_probes=None if rule_supported else json.dumps(unsupported_probes),
+                manual=False,
+                benchmark_type=benchmark_type
+            )
+
+            # Now insert regex issues for this rule
+            for regex_issue in regex_results:
+                insert_regex_issue(
+                    rule_id,
+                    str(regex_issue['definition_id']),
+                    regex_issue['node_id'],
+                    regex_issue['regex'],
+                    regex_issue['reason']
+                )
+
+            generated_rules.append({
+                "rule_id": rule_id,
+                "definition_id": definition_id,
+                "oval_path": out_path
+            })
+            
+        except Exception as e:
+            print(f"⚠ Failed to extract OVAL for rule {rule_id}: {e}")
+            continue                        
+    return generated_rules
 
 def parse_stig(file_path, benchmark_dir, benchmark_name, benchmark_type):
     print(f"🔍 Parsing: {file_path}")

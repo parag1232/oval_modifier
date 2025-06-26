@@ -11,7 +11,7 @@ import shutil
 import os, json, sqlite3
 from backend.oval_parser import OvalDSA
 from backend.oval_analyzer import OvalAnalyzer
-from backend.disa_stig import parse_stig, generate_sensor_for_rule
+from backend.disa_stig import parse_stig, generate_sensor_for_rule,parse_cis_stig
 from backend.database import initialize_db
 import json
 app = FastAPI()
@@ -119,8 +119,8 @@ def process_stig_file(file_path: str, benchmark_dir: str, benchmark_name: str,be
                 rule["oval_path"]
             )
 
-def process_cis_file(file_path: str, benchmark_dir: str, benchmark_name: str,benchmark_type: str = "CIS"):
-    parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type)    
+def process_cis_file(xccdf_path: str, oval_path: str, benchmark_dir: str, benchmark_name: str,behenchmark_type: str = "CIS"):
+    parse_cis_stig(xccdf_path, oval_path,benchmark_dir, benchmark_name,behenchmark_type)    
 
 @app.post("/api/stig/upload")
 async def upload_stig_file(
@@ -143,15 +143,15 @@ async def upload_stig_file(
             background_tasks.add_task(process_stig_file, file_path, benchmark_dir, benchmark_name,"DISA",background_tasks)
 
         elif benchmark_type == "CIS":
-            xccdf_path = os.path.join(benchmark_dir, xccdf_file.filename)
+            xccdf_path = os.path.join(benchmark_dir, "xccdf.xml")
             with open(xccdf_path, "wb") as f:
                 f.write(await xccdf_file.read())
 
-            oval_path = os.path.join(benchmark_dir, oval_file.filename)
+            oval_path = os.path.join(benchmark_dir, "oval.xml")
             with open(oval_path, "wb") as f:
                 f.write(await oval_file.read())
 
-            background_tasks.add_task(process_cis_file, xccdf_path, oval_path, benchmark_dir, benchmark_name)
+            background_tasks.add_task(process_cis_file, xccdf_path, oval_path, benchmark_dir, benchmark_name,"CIS")
 
         else:
             raise HTTPException(status_code=400, detail="Unsupported benchmark type")
