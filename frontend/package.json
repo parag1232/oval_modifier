@@ -7,7 +7,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@codemirror/lang-xml": "^6.1.0",
     "@shadcn/ui": "latest",
+    "@uiw/react-codemirror": "^4.23.13",
+    "js-beautify": "^1.15.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.11.0"

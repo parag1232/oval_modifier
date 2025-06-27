@@ -122,13 +122,13 @@ def parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name,benchmar
                 # Skip SCE rules
                 print(f"⚠ Skipping SCE rule because of script: {rule_id}")
                 continue
+            if "Mamual Rule" in definition_id:
+                continue
             temp_dsa = OvalDSA(oval_bytes)
             temp_dsa.keep_only_definition(definition_id)
-            output_bytes = temp_dsa.to_xml_bytes()
-
-            lxml_tree = lxml_etree.parse(output_bytes)
+            tree = lxml_etree.ElementTree(temp_dsa.to_lxml_element())
             out_path = os.path.join(ovals_dir, f"{rule_id}.xml")
-            lxml_tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
+            tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
 
             print(f"✅ Extracted OVAL for rule: {rule_id}")
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")

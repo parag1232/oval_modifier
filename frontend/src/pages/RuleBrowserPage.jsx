@@ -1,17 +1,49 @@
 import React, { useEffect, useState } from "react";
-import { useParams,useNavigate} from "react-router-dom";
-import { getRules, deleteRules, downloadMergedOval,getOval,downloadSingleRuleOval } from "../api/api";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  getRules,
+  deleteRules,
+  downloadMergedOval,
+  getOval,
+  downloadSingleRuleOval,
+  saveOval,
+} from "../api/api";
 
-function Modal({ open, onClose, title, children }) {
+import CodeMirror from "@uiw/react-codemirror";
+import { xml } from "@codemirror/lang-xml";
+import beautify from "js-beautify";
+
+function Modal({ open, onClose, title, children, onSave }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
       <div className="bg-white rounded-lg w-3/4 p-4 max-h-[80vh] overflow-auto">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button onClick={onClose} className="text-red-600 font-bold text-xl">×</button>
+          <button
+            onClick={onClose}
+            className="text-red-600 font-bold text-xl"
+          >
+            ×
+          </button>
         </div>
         <div className="overflow-y-auto">{children}</div>
+        <div className="mt-4 flex justify-end space-x-2">
+          {onSave && (
+            <button
+              onClick={onSave}
+              className="bg-green-600 text-white px-4 py-2 rounded"
+            >
+              Save
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="bg-gray-500 text-white px-4 py-2 rounded"
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -26,6 +58,7 @@ function RuleBrowserPage() {
   const [selected, setSelected] = useState([]);
   const [sortAsc, setSortAsc] = useState(true);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
+  const [saveStatus, setSaveStatus] = useState("");
   const navigate = useNavigate();
 
   const fetchRules = () => {
@@ -38,9 +71,19 @@ function RuleBrowserPage() {
 
   const handleOpenRule = async (ruleId) => {
     const res = await getOval(benchmark, ruleId);
+
+    // Pretty-print the XML for better editing
+    const formatted = beautify.html(res.oval, {
+      indent_size: 2,
+      wrap_line_length: 120,
+      unformatted: [], // format all tags
+    });
+
     setSelectedRule(ruleId);
-    setOval(res.oval);
+    setOval(formatted);
+    setSaveStatus("");
   };
+
   const handleDownloadRuleOval = async (ruleId) => {
     try {
       await downloadSingleRuleOval(benchmark, ruleId);
@@ -48,38 +91,62 @@ function RuleBrowserPage() {
       alert("Failed to download rule OVAL: " + err.message);
     }
   };
+
+  const handleSaveOval = async () => {
+    try {
+      await saveOval(benchmark, selectedRule, oval);
+      setSaveStatus("✅ OVAL saved successfully.");
+      fetchRules();
+      setTimeout(() => setSelectedRule(""), 1000);
+    } catch (err) {
+      setSaveStatus("❌ Failed to save OVAL: " + err.message);
+    }
+  };
+
   const handleSelect = (ruleId, index, event) => {
     if (event.shiftKey && lastSelectedIndex !== null) {
       const start = Math.min(lastSelectedIndex, index);
       const end = Math.max(lastSelectedIndex, index);
-      const idsToSelect = sortedRules.slice(start, end + 1).map(rule => rule.rule_id);
+      const idsToSelect = sortedRules
+        .slice(start, end + 1)
+        .map((rule) => rule.rule_id);
       const merged = Array.from(new Set([...selected, ...idsToSelect]));
       setSelected(merged);
     } else if (event.ctrlKey || event.metaKey) {
-      setSelected(prev =>
-        prev.includes(ruleId) ? prev.filter(id => id !== ruleId) : [...prev, ruleId]
+      setSelected((prev) =>
+        prev.includes(ruleId)
+          ? prev.filter((id) => id !== ruleId)
+          : [...prev, ruleId]
       );
       setLastSelectedIndex(index);
     } else {
-      setSelected(prev =>
-        prev.includes(ruleId) ? prev.filter(id => id !== ruleId) : [...prev, ruleId]
+      setSelected((prev) =>
+        prev.includes(ruleId)
+          ? prev.filter((id) => id !== ruleId)
+          : [...prev, ruleId]
       );
       setLastSelectedIndex(index);
     }
   };
 
-  const filteredRules = rules.filter(rule =>
+  const filteredRules = rules.filter((rule) =>
     rule.rule_id.toLowerCase().includes(search.trim().toLowerCase())
   );
 
   const sortedRules = [...filteredRules].sort((a, b) => {
-    if (sortAsc) return (a.supported === b.supported) ? 0 : a.supported ? 1 : -1;
-    else return (a.supported === b.supported) ? 0 : a.supported ? -1 : 1;
+    if (sortAsc)
+      return a.supported === b.supported ? 0 : a.supported ? 1 : -1;
+    else return a.supported === b.supported ? 0 : a.supported ? -1 : 1;
   });
 
   const handleDeleteSelected = async () => {
     if (!selected.length) return;
-    if (!window.confirm(`Are you sure you want to delete ${selected.length} rules?`)) return;
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${selected.length} rules?`
+      )
+    )
+      return;
 
     try {
       await deleteRules(benchmark, selected);
@@ -126,14 +193,12 @@ function RuleBrowserPage() {
           Download Merged OVAL
         </button>
         <button
-        className="bg-purple-600 text-white px-4 py-2 rounded"
-        onClick={() => navigate(`/regex-issues/${benchmark}`)}
-      >
-        Unsupported Regex
-      </button>
+          className="bg-purple-600 text-white px-4 py-2 rounded"
+          onClick={() => navigate(`/regex-issues/${benchmark}`)}
+        >
+          Unsupported Regex
+        </button>
       </div>
-
-      
 
       <table className="border border-gray-300 w-full">
         <thead className="bg-gray-200">
@@ -152,6 +217,7 @@ function RuleBrowserPage() {
             >
               Sensor File Status {sortAsc ? "▲" : "▼"}
             </th>
+            <th className="px-4 py-2 border">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -161,43 +227,69 @@ function RuleBrowserPage() {
                 <input
                   type="checkbox"
                   checked={selected.includes(rule.rule_id)}
-                  onChange={(e) => handleSelect(rule.rule_id, index, e.nativeEvent)}
+                  onChange={(e) =>
+                    handleSelect(rule.rule_id, index, e.nativeEvent)
+                  }
                 />
               </td>
               <td className="px-4 py-2 border">{rule.rule_id}</td>
               <td className="px-4 py-2 border">
                 {rule.supported ? (
-                  <span className="text-green-600 font-semibold">Supported ✅</span>
+                  <span className="text-green-600 font-semibold">
+                    Supported ✅
+                  </span>
                 ) : (
-                  <span className="text-red-600 font-semibold">Unsupported ❌</span>
+                  <span className="text-red-600 font-semibold">
+                    Unsupported ❌
+                  </span>
                 )}
               </td>
               <td className="px-4 py-2 border">
                 {rule.sensor_file_generated ? (
-                  <span className="text-green-600 font-semibold">Generated ✅</span>
+                  <span className="text-green-600 font-semibold">
+                    Generated ✅
+                  </span>
                 ) : (
-                  <span className="text-red-600 font-semibold">Not Generated ❌</span>
+                  <span className="text-red-600 font-semibold">
+                    Not Generated ❌
+                  </span>
                 )}
               </td>
               <td className="px-4 py-2 border">
-                <button className="bg-blue-500 text-white px-3 py-1 rounded" onClick={() => handleOpenRule(rule.rule_id)}>
+                <button
+                  className="bg-blue-500 text-white px-3 py-1 rounded mr-2"
+                  onClick={() => handleOpenRule(rule.rule_id)}
+                >
                   View OVAL
-              </button>
+                </button>
+                <button
+                  className="bg-blue-500 text-white px-3 py-1 rounded"
+                  onClick={() => handleDownloadRuleOval(rule.rule_id)}
+                >
+                  Download OVAL
+                </button>
               </td>
-              <td className="px-4 py-2 border">
-                  <button
-                    className="bg-blue-500 text-white px-3 py-1 rounded"
-                    onClick={() => handleDownloadRuleOval(rule.rule_id)}
-                  >
-                    Download OVAL
-                  </button>
-            </td>
             </tr>
           ))}
         </tbody>
       </table>
-      <Modal open={!!selectedRule} onClose={() => setSelectedRule("")} title={`OVAL for ${selectedRule}`}>
-        <pre className="text-green-600 text-sm whitespace-pre-wrap">{oval}</pre>
+
+      <Modal
+        open={!!selectedRule}
+        onClose={() => setSelectedRule("")}
+        title={`OVAL for ${selectedRule}`}
+        onSave={handleSaveOval}
+      >
+        <CodeMirror
+          value={oval}
+          height="500px"
+          theme="dark"
+          extensions={[xml()]}
+          onChange={(value) => setOval(value)}
+        />
+        {saveStatus && (
+          <p className="mt-2 text-blue-600 font-medium">{saveStatus}</p>
+        )}
       </Modal>
     </div>
   );

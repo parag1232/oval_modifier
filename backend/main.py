@@ -11,9 +11,13 @@ import shutil
 import os, json, sqlite3
 from backend.oval_parser import OvalDSA
 from backend.oval_analyzer import OvalAnalyzer
+from lxml import etree as ET
+from fastapi.responses import StreamingResponse
+import io
 from backend.disa_stig import parse_stig, generate_sensor_for_rule,parse_cis_stig
 from backend.database import initialize_db
 import json
+from fastapi import Request
 app = FastAPI()
 
 app.add_middleware(
@@ -230,15 +234,16 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
             keep_definitions.append(def_id)
 
     dsa.keep_only_definitions(keep_definitions)
-    output_bytes = dsa.to_xml_bytes()
+    root_elem = dsa.to_lxml_element()
+    output_bytes = ET.tostring(root_elem, pretty_print=True, encoding="UTF-8", xml_declaration=True)
 
     return StreamingResponse(
-        output_bytes,
-        media_type="application/xml",
-        headers={
-            "Content-Disposition": f"attachment; filename={benchmark}_merged_oval.xml"
-        }
-    )
+    io.BytesIO(output_bytes),
+    media_type="application/xml",
+    headers={
+        "Content-Disposition": f"attachment; filename={benchmark}_merged_oval.xml"
+    }
+)
 
 
 
@@ -321,3 +326,36 @@ async def get_regex_issues(benchmark: str):
     response_text = "\n".join(output_lines)
 
     return PlainTextResponse(response_text, media_type="text/plain")
+
+
+
+@app.post("/api/benchmarks/{benchmark}/rules/{rule_id}")
+async def save_rule_oval(benchmark: str, rule_id: str, request: Request):
+    data = await request.json()
+    oval_content = data.get("oval")
+
+    if oval_content is None:
+        raise HTTPException(status_code=400, detail="Missing oval content")
+
+    # Look up oval_path in DB
+    conn = sqlite3.connect("data/stig.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT oval_path FROM rules WHERE benchmark=? AND rule_id=?",
+        (benchmark, rule_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    oval_path = row[0]
+    if not oval_path:
+        raise HTTPException(status_code=404, detail="No oval path found for rule")
+
+    # Write new content
+    with open(oval_path, "w", encoding="utf-8") as f:
+        f.write(oval_content)
+
+    return JSONResponse({"message": "Oval saved successfully"})
