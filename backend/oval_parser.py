@@ -175,7 +175,7 @@ class OvalDSA:
         root_copy = ET.Element(self.root.tag, nsmap=self.root.nsmap)
 
         # Generator
-        gen = self.root.find("oval:generator", namespaces=self.nsmap)
+        gen = self.root.find("generator", namespaces=self.nsmap)
         if gen is not None:
             root_copy.append(gen)
 
@@ -190,3 +190,56 @@ class OvalDSA:
                     section_elem.append(elem)
 
         return root_copy
+    
+
+    def merge_edited_ovals(self, oval_file_paths):
+        """
+        Merge the edited OVAL XMLs into this DSA's XML tree.
+        For each edited file, replace definitions, tests, objects,
+        states, and variables in the master tree.
+        """
+        # Sections in OVAL
+        sections = ["definitions", "tests", "objects", "states", "variables"]
+
+        for oval_path in oval_file_paths:
+            with open(oval_path, "rb") as f:
+                edited_tree = ET.parse(f)
+            edited_root = edited_tree.getroot()
+
+            for section_name in sections:
+                edited_section = edited_root.find(f".//{section_name}", namespaces=self.nsmap)
+                if edited_section is None:
+                    continue
+
+                # Find the matching section in self.root
+                master_section = self.root.find(f".//{section_name}", namespaces=self.nsmap)
+                if master_section is None:
+                    # Section might not exist yet, create it
+                    master_section = ET.SubElement(
+                        self.root,
+                        f"{{{self.nsmap[None]}}}{section_name}"
+                    )
+
+                # Build index of edited elements by ID
+                edited_by_id = {
+                    el.attrib["id"]: el
+                    for el in edited_section
+                    if "id" in el.attrib
+                }
+
+                # Remove any old elements in master tree that have matching IDs
+                for old_elem in list(master_section):
+                    old_id = old_elem.attrib.get("id")
+                    if old_id and old_id in edited_by_id:
+                        master_section.remove(old_elem)
+
+                # Append edited elements
+                for el in edited_section:
+                    master_section.append(el)
+
+        # Rebuild graph from updated XML
+        self.nodes.clear()
+        self.reverse_refs.clear()
+        self.element_by_id.clear()
+        self._index_elements()
+        self._build_graph()

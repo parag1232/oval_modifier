@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import HTTPException
 from pydantic import BaseModel
 from fastapi import Body
+from collections import defaultdict
 import shutil
 import os, json, sqlite3
 from backend.oval_parser import OvalDSA
@@ -208,7 +209,52 @@ async def list_benchmarks():
 class GenerateOvalsRequest(BaseModel):
     rule_ids: list[str]
 
-from fastapi.responses import StreamingResponse
+def build_merged_oval_from_files(oval_paths):
+    """
+    Takes a list of oval XML file paths.
+    Returns a merged <oval_definitions> lxml element
+    containing combined definitions, tests, objects, states, variables.
+    """
+    NS_OVAL = "http://oval.mitre.org/XMLSchema/oval-definitions-5"
+    nsmap = {None: NS_OVAL}
+
+    root = ET.Element("{%s}oval_definitions" % NS_OVAL, nsmap=nsmap)
+
+    # Add <generator> section (from the first file)
+    generator_added = False
+
+    # Map from ID → element
+    id_map = defaultdict(dict)
+
+    for path in oval_paths:
+        tree = ET.parse(path)
+        oval_root = tree.getroot()
+
+        if not generator_added:
+            generator_elem = oval_root.find(".//{*}generator")
+            if generator_elem is not None:
+                root.append(generator_elem)
+                generator_added = True
+
+        for section_name in ["definitions", "tests", "objects", "states", "variables"]:
+            section = oval_root.find(f".//{{*}}{section_name}")
+            if section is None:
+                continue
+
+            for el in section:
+                el_id = el.attrib.get("id")
+                if el_id:
+                    if el_id not in id_map[section_name]:
+                        id_map[section_name][el_id] = el
+
+    # Now create merged sections
+    for section_name in ["definitions", "tests", "objects", "states", "variables"]:
+        if id_map[section_name]:
+            sec_elem = ET.SubElement(root, f"{{{NS_OVAL}}}{section_name}")
+            for el in id_map[section_name].values():
+                sec_elem.append(el)
+
+    return root
 
 @app.post("/api/benchmarks/{benchmark}/generate-ovals")
 async def generate_and_download_oval(benchmark: str, request: GenerateOvalsRequest):
@@ -217,33 +263,29 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
         raise HTTPException(status_code=400, detail="No rule IDs provided")
 
     benchmark_dir = f"data/{benchmark}"
-    oval_path = os.path.join(benchmark_dir, "oval.xml")
-    with open(oval_path, "rb") as f:
-        oval_bytes = f.read()
+    ovals_dir = os.path.join(benchmark_dir, "ovals")
 
-    
-    with open(os.path.join(benchmark_dir, "xccdf_to_oval_definition_map.json"), "r") as f:
-        xccdf_to_oval_def = json.load(f)
-
-    dsa = OvalDSA(oval_bytes)
-
-    keep_definitions = []
+    oval_files = []
     for rule_id in rule_ids:
-        def_id = xccdf_to_oval_def.get(rule_id)
-        if def_id:
-            keep_definitions.append(def_id)
+        oval_path = os.path.join(ovals_dir, f"{rule_id}.xml")
+        if os.path.exists(oval_path):
+            oval_files.append(oval_path)
+        else:
+            pass
 
-    dsa.keep_only_definitions(keep_definitions)
-    root_elem = dsa.to_lxml_element()
-    output_bytes = ET.tostring(root_elem, pretty_print=True, encoding="UTF-8", xml_declaration=True)
+    if not oval_files:
+        raise HTTPException(status_code=404, detail="No edited OVAL files found for the requested rules.")
+
+    merged_root = build_merged_oval_from_files(oval_files)
+    output_bytes = ET.tostring(merged_root, pretty_print=True, encoding="UTF-8", xml_declaration=True)
 
     return StreamingResponse(
-    io.BytesIO(output_bytes),
-    media_type="application/xml",
-    headers={
-        "Content-Disposition": f"attachment; filename={benchmark}_merged_oval.xml"
-    }
-)
+        io.BytesIO(output_bytes),
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f"attachment; filename={benchmark}_merged_oval.xml"
+        }
+    )
 
 
 
