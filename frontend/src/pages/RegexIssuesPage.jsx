@@ -28,18 +28,23 @@ export default function RegexIssuesPage() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-4">
-      <h1 className="text-xl mb-4 font-semibold">Unsupported Regex for {benchmark}</h1>
-      {error && <p className="text-red-600">{error}</p>}
-      
-      <div className="relative bg-gray-900 text-green-200 p-4 rounded overflow-auto">
+    <div className="max-w-6xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-6 text-gray-800">
+        Unsupported Regex for {benchmark}
+      </h1>
+
+      {error && <p className="text-red-600 mb-4">{error}</p>}
+
+      <div className="relative bg-gray-900 text-green-200 p-4 rounded-lg shadow overflow-auto">
         <button
-          className="absolute top-2 right-2 bg-gray-700 text-white px-3 py-1 rounded text-sm hover:bg-gray-600"
+          className="absolute top-3 right-3 bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded-md text-sm font-semibold"
           onClick={handleCopy}
         >
           {copied ? "Copied!" : "Copy"}
         </button>
-        <pre><code>{regexText}</code></pre>
+        <pre className="text-sm">
+          <code>{regexText}</code>
+        </pre>
       </div>
     </div>
   );

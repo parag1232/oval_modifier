@@ -1,3 +1,4 @@
+// RuleBrowserPage.jsx
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -7,6 +8,7 @@ import {
   getOval,
   downloadSingleRuleOval,
   saveOval,
+  getHostState,
 } from "../api/api";
 
 import CodeMirror from "@uiw/react-codemirror";
@@ -16,30 +18,30 @@ import beautify from "js-beautify";
 function Modal({ open, onClose, title, children, onSave }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-      <div className="bg-white rounded-lg w-3/4 p-4 max-h-[80vh] overflow-auto">
+    <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
+      <div className="bg-white rounded-xl w-full max-w-4xl p-6 max-h-[80vh] overflow-auto shadow-xl">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="text-xl font-bold text-gray-800">{title}</h2>
           <button
             onClick={onClose}
-            className="text-red-600 font-bold text-xl"
+            className="text-gray-400 hover:text-red-500 text-2xl font-bold"
           >
             ×
           </button>
         </div>
         <div className="overflow-y-auto">{children}</div>
-        <div className="mt-4 flex justify-end space-x-2">
+        <div className="mt-6 flex justify-end gap-3">
           {onSave && (
             <button
               onClick={onSave}
-              className="bg-green-600 text-white px-4 py-2 rounded"
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold"
             >
               Save
             </button>
           )}
           <button
             onClick={onClose}
-            className="bg-gray-500 text-white px-4 py-2 rounded"
+            className="bg-gray-400 hover:bg-gray-500 text-white px-4 py-2 rounded-md font-semibold"
           >
             Cancel
           </button>
@@ -59,6 +61,11 @@ function RuleBrowserPage() {
   const [sortAsc, setSortAsc] = useState(true);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
   const [saveStatus, setSaveStatus] = useState("");
+
+  const [hostStateContent, setHostStateContent] = useState("");
+  const [hostStateModalOpen, setHostStateModalOpen] = useState(false);
+  const [selectedHostStateRule, setSelectedHostStateRule] = useState("");
+
   const navigate = useNavigate();
 
   const fetchRules = () => {
@@ -71,14 +78,11 @@ function RuleBrowserPage() {
 
   const handleOpenRule = async (ruleId) => {
     const res = await getOval(benchmark, ruleId);
-
-    // Pretty-print the XML for better editing
     const formatted = beautify.html(res.oval, {
       indent_size: 2,
       wrap_line_length: 120,
-      unformatted: [], // format all tags
+      unformatted: [],
     });
-
     setSelectedRule(ruleId);
     setOval(formatted);
     setSaveStatus("");
@@ -166,114 +170,170 @@ function RuleBrowserPage() {
     }
   };
 
-  return (
-    <div className="max-w-6xl mx-auto p-4">
-      <h1 className="text-xl mb-4 font-semibold">Rules for {benchmark}</h1>
+  const handleViewHostState = async (ruleId) => {
+    try {
+      const res = await getHostState(benchmark, ruleId);
+      setSelectedHostStateRule(ruleId);
+      setHostStateContent(res);
+      setHostStateModalOpen(true);
+    } catch (err) {
+      alert("Failed to fetch host state: " + err.message);
+    }
+  };
 
-      <div className="flex mb-4 space-x-4">
+  return (
+    <div className="max-w-7xl mx-auto p-6">
+      <h1 className="text-2xl font-bold text-gray-800 mb-6">
+        Rules for {benchmark}
+      </h1>
+
+      {/* Search and Actions */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <input
           type="text"
           placeholder="Search Rule ID"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="border p-2 w-80"
+          className="border border-gray-300 rounded-md px-4 py-2 w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
-        <button
-          className="bg-red-600 text-white px-4 py-2 rounded"
-          disabled={selected.length === 0}
-          onClick={handleDeleteSelected}
-        >
-          Delete Selected
-        </button>
-        <button
-          className="bg-green-600 text-white px-4 py-2 rounded"
-          disabled={selected.length === 0}
-          onClick={handleGenerateOvals}
-        >
-          Download Merged OVAL
-        </button>
-        <button
-          className="bg-purple-600 text-white px-4 py-2 rounded"
-          onClick={() => navigate(`/regex-issues/${benchmark}`)}
-        >
-          Unsupported Regex
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md font-semibold disabled:opacity-50"
+            disabled={selected.length === 0}
+            onClick={handleDeleteSelected}
+          >
+            Delete Selected
+          </button>
+          <button
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold disabled:opacity-50"
+            disabled={selected.length === 0}
+            onClick={handleGenerateOvals}
+          >
+            Download Merged OVAL
+          </button>
+          <button
+            className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md font-semibold"
+            onClick={() => navigate(`/regex-issues/${benchmark}`)}
+          >
+            Unsupported Regex
+          </button>
+        </div>
       </div>
 
-      <table className="border border-gray-300 w-full">
-        <thead className="bg-gray-200">
-          <tr>
-            <th className="px-4 py-2 border"></th>
-            <th className="px-4 py-2 border">Rule ID</th>
-            <th
-              className="px-4 py-2 border cursor-pointer"
-              onClick={() => setSortAsc(!sortAsc)}
-            >
-              Supported {sortAsc ? "▲" : "▼"}
-            </th>
-            <th
-              className="px-4 py-2 border cursor-pointer"
-              onClick={() => setSortAsc(!sortAsc)}
-            >
-              Sensor File Status {sortAsc ? "▲" : "▼"}
-            </th>
-            <th className="px-4 py-2 border">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedRules.map((rule, index) => (
-            <tr key={rule.rule_id} className="border-b">
-              <td className="px-4 py-2 border">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(rule.rule_id)}
-                  onChange={(e) =>
-                    handleSelect(rule.rule_id, index, e.nativeEvent)
-                  }
-                />
-              </td>
-              <td className="px-4 py-2 border">{rule.rule_id}</td>
-              <td className="px-4 py-2 border">
-                {rule.supported ? (
-                  <span className="text-green-600 font-semibold">
-                    Supported ✅
-                  </span>
-                ) : (
-                  <span className="text-red-600 font-semibold">
-                    Unsupported ❌
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-2 border">
-                {rule.sensor_file_generated ? (
-                  <span className="text-green-600 font-semibold">
-                    Generated ✅
-                  </span>
-                ) : (
-                  <span className="text-red-600 font-semibold">
-                    Not Generated ❌
-                  </span>
-                )}
-              </td>
-              <td className="px-4 py-2 border">
-                <button
-                  className="bg-blue-500 text-white px-3 py-1 rounded mr-2"
-                  onClick={() => handleOpenRule(rule.rule_id)}
-                >
-                  View OVAL
-                </button>
-                <button
-                  className="bg-blue-500 text-white px-3 py-1 rounded"
-                  onClick={() => handleDownloadRuleOval(rule.rule_id)}
-                >
-                  Download OVAL
-                </button>
-              </td>
+      {/* Table */}
+      <div className="overflow-auto rounded-lg border border-gray-200 shadow-sm">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider"></th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                Rule ID
+              </th>
+              <th
+                className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider cursor-pointer"
+                onClick={() => setSortAsc(!sortAsc)}
+              >
+                Supported {sortAsc ? "▲" : "▼"}
+              </th>
+              <th
+                className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider cursor-pointer"
+                onClick={() => setSortAsc(!sortAsc)}
+              >
+                Sensor File Status {sortAsc ? "▲" : "▼"}
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                Rule Evaluation
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                Actions
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {sortedRules.map((rule, index) => (
+              <tr key={rule.rule_id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(rule.rule_id)}
+                    onChange={(e) =>
+                      handleSelect(rule.rule_id, index, e.nativeEvent)
+                    }
+                    className="h-4 w-4 text-blue-600"
+                  />
+                </td>
+                <td
+                  className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 max-w-[200px] overflow-hidden truncate"
+                  title={rule.rule_id}
+                >
+                  {rule.rule_id}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-sm">
+                  {rule.supported ? (
+                    <span className="text-green-700 font-semibold">
+                      Supported ✅
+                    </span>
+                  ) : (
+                    <span className="text-red-600 font-semibold">
+                      Unsupported ❌
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-sm">
+                  {rule.sensor_file_generated ? (
+                    <span className="text-green-700 font-semibold">
+                      Generated ✅
+                    </span>
+                  ) : (
+                    <span className="text-red-600 font-semibold">
+                      Not Generated ❌
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-sm">
+                  {rule.evaluation ? (
+                    <span
+                      className={
+                        rule.evaluation === "Passed"
+                          ? "text-green-700 font-semibold"
+                          : rule.evaluation === "Failed"
+                          ? "text-red-600 font-semibold"
+                          : "text-yellow-600 font-semibold"
+                      }
+                    >
+                      {rule.evaluation}
+                    </span>
+                  ) : (
+                    <span className="text-gray-500 italic">N/A</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap flex flex-wrap gap-2">
+                  <button
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                    onClick={() => handleOpenRule(rule.rule_id)}
+                  >
+                    View OVAL
+                  </button>
+                  <button
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                    onClick={() => handleViewHostState(rule.rule_id)}
+                  >
+                    View HostState
+                  </button>
+                  <button
+                    className="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                    onClick={() => handleDownloadRuleOval(rule.rule_id)}
+                  >
+                    Download OVAL
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
+      {/* OVAL Modal */}
       <Modal
         open={!!selectedRule}
         onClose={() => setSelectedRule("")}
@@ -290,6 +350,17 @@ function RuleBrowserPage() {
         {saveStatus && (
           <p className="mt-2 text-blue-600 font-medium">{saveStatus}</p>
         )}
+      </Modal>
+
+      {/* HostState Modal */}
+      <Modal
+        open={hostStateModalOpen}
+        onClose={() => setHostStateModalOpen(false)}
+        title={`HostState for ${selectedHostStateRule}`}
+      >
+        <pre className="bg-gray-100 p-4 rounded text-sm overflow-auto max-h-[500px]">
+          {hostStateContent || "No host state data available."}
+        </pre>
       </Modal>
     </div>
   );

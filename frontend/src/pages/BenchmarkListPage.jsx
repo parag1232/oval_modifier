@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { getBenchmarks } from "../api/api";
+import { getBenchmarks, deleteBenchmark, downloadFullBenchmarkOval } from "../api/api";
 import { useNavigate } from "react-router-dom";
-import { deleteBenchmark,downloadFullBenchmarkOval } from "../api/api";
 
 export default function BenchmarkListPage() {
   const [benchmarks, setBenchmarks] = useState([]);
@@ -10,71 +9,83 @@ export default function BenchmarkListPage() {
   const fetchBenchmarks = () => {
     getBenchmarks().then(setBenchmarks);
   };
+
   const handleGenerateFullOval = async (benchmark) => {
-  try {
-    await downloadFullBenchmarkOval(benchmark);
-  } catch (err) {
-    alert("Failed to download: " + err.message);
-  }
-};
+    try {
+      await downloadFullBenchmarkOval(benchmark);
+    } catch (err) {
+      alert("Failed to download: " + err.message);
+    }
+  };
 
   useEffect(() => {
     fetchBenchmarks();
   }, []);
 
-    const handleDelete = async (benchmark) => {
+  const handleDelete = async (benchmark) => {
     if (window.confirm(`Are you sure you want to delete benchmark: ${benchmark}?`)) {
       try {
         await deleteBenchmark(benchmark);
-        fetchBenchmarks();  // Refresh list after delete
+        fetchBenchmarks();
       } catch (err) {
         alert("Failed to delete: " + err.message);
       }
     }
   };
 
-   return (
-    <div className="max-w-5xl mx-auto p-4">
-      <h1 className="text-xl mb-4 font-semibold">Uploaded Benchmarks</h1>
-      <table className="border border-gray-300">
-        <thead className="bg-gray-200">
-          <tr>
-            <th className="px-4 py-2 border">Benchmark</th>
-            <th className="px-4 py-2 border">Type</th>
-            <th className="px-4 py-2 border">Total</th>
-            <th className="px-4 py-2 border">Automated</th>
-            <th className="px-4 py-2 border">Unsupported</th>
-            <th className="px-4 py-2 border">Coverage %</th>
-            <th className="px-4 py-2 border">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {benchmarks.map((b) => (
-            <tr key={b.benchmark} className="hover:bg-gray-100">
-              <td className="px-4 py-2 border">{b.benchmark}</td>
-              <td className="px-4 py-2 border">{b.type}</td>
-              <td className="px-4 py-2 border">{b.total_rules}</td>
-              <td className="px-4 py-2 border">{b.automated_rules}</td>
-              <td className="px-4 py-2 border">{b.unsupported_rules}</td>
-              <td className="px-4 py-2 border">{b.coverage}%</td>
-              <td className="px-4 py-2 border">
-                <button className="bg-blue-500 text-white px-3 py-1 rounded mr-2" onClick={() => navigate(`/rules/${b.benchmark}`)}>
-                  View
-                </button>
-                <button className="bg-red-500 text-white px-3 py-1 rounded mr-2" onClick={() => handleDelete(b.benchmark)}>
-                  Delete
-                </button>
-                <button
-                        className="bg-purple-500 text-white px-3 py-1 rounded"
-                        onClick={() => handleGenerateFullOval(b.benchmark)}
-                >
-                  Generate OVAL
-              </button>
-              </td>
+  return (
+    <div className="max-w-6xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-6 text-gray-800">Uploaded Benchmarks</h1>
+
+      <div className="overflow-auto border border-gray-200 rounded-lg shadow-sm">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Benchmark</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Type</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Total</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Automated</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Unsupported</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Coverage %</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {benchmarks.map((b) => (
+              <tr key={b.benchmark} className="hover:bg-gray-50">
+                <td className="px-4 py-3 text-sm font-medium text-gray-800">{b.benchmark}</td>
+                <td className="px-4 py-3 text-sm">{b.type}</td>
+                <td className="px-4 py-3 text-sm">{b.total_rules}</td>
+                <td className="px-4 py-3 text-sm">{b.automated_rules}</td>
+                <td className="px-4 py-3 text-sm">{b.unsupported_rules}</td>
+                <td className="px-4 py-3 text-sm">{b.coverage}%</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                      onClick={() => navigate(`/rules/${b.benchmark}`)}
+                    >
+                      View
+                    </button>
+                    <button
+                      className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                      onClick={() => handleDelete(b.benchmark)}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                      onClick={() => handleGenerateFullOval(b.benchmark)}
+                    >
+                      Generate OVAL
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

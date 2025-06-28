@@ -103,3 +103,17 @@ export async function saveOval(benchmark, ruleId, ovalContent) {
   }
   return res.json();
 }
+
+export async function getHostState(benchmark, ruleId, ovalContent) {
+  const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/rules/${ruleId}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ oval: ovalContent }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}
