@@ -109,7 +109,7 @@ export async function getHostState(benchmark, ruleId) {
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return res.text();
+  return res.json();
 }
 
 

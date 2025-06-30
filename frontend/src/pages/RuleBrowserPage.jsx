@@ -398,9 +398,11 @@ function RuleBrowserPage() {
         onClose={() => setHostStateModalOpen(false)}
         title={`HostState for ${selectedHostStateRule}`}
       >
-        <pre className="bg-gray-100 p-4 rounded text-sm overflow-auto max-h-[500px]">
-          {hostStateContent || "No host state data available."}
-        </pre>
+      <pre className="bg-gray-100 p-4 rounded text-sm overflow-auto max-h-[500px]">
+        {hostStateContent?.hoststate_json
+          ? JSON.stringify(hostStateContent.hoststate_json, null, 2)
+          : "No host state data available."}
+      </pre>
       </Modal>
     </div>
   );
