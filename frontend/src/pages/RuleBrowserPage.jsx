@@ -15,6 +15,7 @@ import {
 
 import CodeMirror from "@uiw/react-codemirror";
 import { xml } from "@codemirror/lang-xml";
+import { json } from "@codemirror/lang-json"; // ✅ NEW
 import beautify from "js-beautify";
 
 function Modal({ open, onClose, title, children, onSave }) {
@@ -188,8 +189,9 @@ function RuleBrowserPage() {
   const handleViewHostState = async (ruleId) => {
     try {
       const res = await getHostState(benchmark, ruleId);
+      const formatted = JSON.stringify(res.hoststate_json, null, 2);
       setSelectedHostStateRule(ruleId);
-      setHostStateContent(res);
+      setHostStateContent(formatted);
       setHostStateModalOpen(true);
     } catch (err) {
       alert("Failed to fetch host state: " + err.message);
@@ -398,11 +400,12 @@ function RuleBrowserPage() {
         onClose={() => setHostStateModalOpen(false)}
         title={`HostState for ${selectedHostStateRule}`}
       >
-      <pre className="bg-gray-100 p-4 rounded text-sm overflow-auto max-h-[500px]">
-        {hostStateContent?.hoststate_json
-          ? JSON.stringify(hostStateContent.hoststate_json, null, 2)
-          : "No host state data available."}
-      </pre>
+        <CodeMirror
+          value={hostStateContent || ""}
+          height="500px"
+          theme="dark"
+          extensions={[json()]}
+        />
       </Modal>
     </div>
   );
