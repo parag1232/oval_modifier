@@ -1,24 +1,25 @@
 # backend/main.py
 
-from fastapi import FastAPI, UploadFile, BackgroundTasks, Form
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import FastAPI, UploadFile, BackgroundTasks, Form, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi import HTTPException
-from pydantic import BaseModel
 from fastapi import Body
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from collections import defaultdict
 import shutil
-import os, json, sqlite3
+import os
+import json
+import io
 from backend.oval_parser import OvalDSA
 from backend.oval_analyzer import OvalAnalyzer
 from lxml import etree as ET
-from fastapi.responses import StreamingResponse
-import io
-from backend.disa_stig import parse_stig, generate_sensor_for_rule,parse_cis_stig
-from backend.database import initialize_db
-import json
-from fastapi import Request
+from backend.disa_stig import parse_stig, generate_sensor_for_rule, parse_cis_stig
+from backend.database import init_db, SessionLocal
+from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost,VCIResult
+from fastapi import Depends
+from cryptography.fernet import Fernet
+
 app = FastAPI()
 
 app.add_middleware(
@@ -31,38 +32,45 @@ app.add_middleware(
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-initialize_db()
-from fastapi.responses import FileResponse
+master_key = os.getenv("MASTER_KEY").encode()
+fernet = Fernet(master_key)
+
+init_db()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.get("/api/benchmarks/{benchmark}/generate-full-oval")
 async def generate_full_benchmark_oval(benchmark: str):
     benchmark_dir = f"data/{benchmark}"
 
-    # Load oval.xml
     oval_path = os.path.join(benchmark_dir, "oval.xml")
     with open(oval_path, "rb") as f:
         oval_bytes = f.read()
 
-    # Load mapping
-    import json
     with open(os.path.join(benchmark_dir, "xccdf_to_oval_definition_map.json"), "r") as f:
         xccdf_to_oval_def = json.load(f)
 
-    from backend.oval_parser import OvalDSA
     dsa = OvalDSA(oval_bytes)
 
-    # Query all non-excluded rules from DB
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT rule_id FROM rules WHERE benchmark=? AND excluded=0", (benchmark,))
-    rows = cursor.fetchall()
-    conn.close()
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
 
-    # Build list of valid definition_ids
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail=f"Benchmark {benchmark} not found")
+
+    rules = session.query(Rule).filter(
+        Rule.benchmark_id == benchmark_obj.id,
+        Rule.excluded == 0
+    ).all()
+
     keep_definitions = []
-    for row in rows:
-        rule_id = row[0]
-        def_id = xccdf_to_oval_def.get(rule_id)
+    for rule in rules:
+        def_id = xccdf_to_oval_def.get(rule.rule_id)
         if def_id:
             keep_definitions.append(def_id)
 
@@ -70,28 +78,33 @@ async def generate_full_benchmark_oval(benchmark: str):
     output_bytes = dsa.to_xml_bytes()
 
     return StreamingResponse(
-        output_bytes,
+        io.BytesIO(output_bytes),
         media_type="application/xml",
         headers={"Content-Disposition": f"attachment; filename={benchmark}_full_oval.xml"}
     )
 
 @app.get("/api/benchmarks/{benchmark}/rules/{rule_id}/oval")
 async def serve_existing_rule_oval(benchmark: str, rule_id: str):
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT oval_path FROM rules WHERE benchmark=? AND rule_id=? AND excluded=0", (benchmark, rule_id))
-    row = cursor.fetchone()
-    conn.close()
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
 
-    if not row or not row[0]:
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id,
+        excluded=0
+    ).first()
+
+    if not rule or not rule.oval_path:
         raise HTTPException(status_code=404, detail="Oval file not found in DB")
 
-    oval_path = row[0]
+    oval_path = rule.oval_path
     if not os.path.exists(oval_path):
         raise HTTPException(status_code=404, detail="Oval file not found on disk")
 
     return FileResponse(oval_path, media_type="application/xml", filename=os.path.basename(oval_path))
-
 
 class DeleteRulesRequest(BaseModel):
     rule_ids: list[str]
@@ -102,17 +115,25 @@ async def delete_rules(benchmark: str, request: DeleteRulesRequest):
     if not rule_ids:
         raise HTTPException(status_code=400, detail="No rule IDs provided")
 
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    query = f"UPDATE rules SET excluded=1 WHERE benchmark=? AND rule_id IN ({','.join(['?'] * len(rule_ids))})"
-    params = [benchmark] + rule_ids
-    cursor.execute(query, params)
-    conn.commit()
-    conn.close()
-    return {"message": f"Excluded {cursor.rowcount} rules"}
-# Background ingestion
-def process_stig_file(file_path: str, benchmark_dir: str, benchmark_name: str,benchmark_type: str = "DISA",background_tasks: BackgroundTasks = None):
-    rules = parse_stig(file_path, benchmark_dir, benchmark_name,benchmark_type)
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    rules = session.query(Rule).filter(
+        Rule.benchmark_id == benchmark_obj.id,
+        Rule.rule_id.in_(rule_ids)
+    ).all()
+
+    for rule in rules:
+        rule.excluded = 1
+
+    session.commit()
+
+    return {"message": f"Excluded {len(rules)} rules"}
+
+def process_stig_file(file_path: str, benchmark_dir: str, benchmark_name: str, benchmark_type: str = "DISA", background_tasks: BackgroundTasks = None):
+    rules = parse_stig(file_path, benchmark_dir, benchmark_name, benchmark_type)
     if background_tasks:
         for rule in rules:
             background_tasks.add_task(
@@ -124,8 +145,18 @@ def process_stig_file(file_path: str, benchmark_dir: str, benchmark_name: str,be
                 rule["oval_path"]
             )
 
-def process_cis_file(xccdf_path: str, oval_path: str, benchmark_dir: str, benchmark_name: str,behenchmark_type: str = "CIS"):
-    parse_cis_stig(xccdf_path, oval_path,benchmark_dir, benchmark_name,behenchmark_type)    
+def process_cis_file(xccdf_path: str, oval_path: str, benchmark_dir: str, benchmark_name: str, benchmark_type: str = "CIS",background_tasks: BackgroundTasks = None):
+    rules = parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name, benchmark_type)
+    if background_tasks:
+        for rule in rules:
+            background_tasks.add_task(
+                generate_sensor_for_rule,
+                benchmark_name,
+                benchmark_dir,
+                rule["rule_id"],
+                rule["definition_id"],
+                rule["oval_path"]
+            )
 
 @app.post("/api/stig/upload")
 async def upload_stig_file(
@@ -140,12 +171,17 @@ async def upload_stig_file(
         benchmark_dir = os.path.join(DATA_DIR, benchmark_name)
         os.makedirs(benchmark_dir, exist_ok=True)
 
+        session = SessionLocal()
+        benchmark = Benchmark(name=benchmark_name, benchmark_type=benchmark_type)
+        session.add(benchmark)
+        session.commit()
+
         if benchmark_type == "DISA":
             file_path = os.path.join(benchmark_dir, stig_file.filename)
             with open(file_path, "wb") as f:
                 f.write(await stig_file.read())
 
-            background_tasks.add_task(process_stig_file, file_path, benchmark_dir, benchmark_name,"DISA",background_tasks)
+            background_tasks.add_task(process_stig_file, file_path, benchmark_dir, benchmark_name, "DISA", background_tasks)
 
         elif benchmark_type == "CIS":
             xccdf_path = os.path.join(benchmark_dir, "xccdf.xml")
@@ -156,74 +192,49 @@ async def upload_stig_file(
             with open(oval_path, "wb") as f:
                 f.write(await oval_file.read())
 
-            background_tasks.add_task(process_cis_file, xccdf_path, oval_path, benchmark_dir, benchmark_name,"CIS")
+            background_tasks.add_task(process_cis_file, xccdf_path, oval_path, benchmark_dir, benchmark_name, "CIS",background_tasks)
 
         else:
             raise HTTPException(status_code=400, detail="Unsupported benchmark type")
 
         return JSONResponse({"message": f"Benchmark '{benchmark_name}' uploaded successfully."})
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        return PlainTextResponse(str(e), status_code=500)
-
-# New API endpoints for frontend
-
 @app.get("/api/benchmarks")
 async def list_benchmarks():
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 
-            benchmark,
-            benchmark_type, 
-            COUNT(*) AS total_rules,
-            SUM(CASE WHEN manual = 0 THEN 1 ELSE 0 END) AS automated_rules,
-            SUM(CASE WHEN manual = 0 AND supported = 0 THEN 1 ELSE 0 END) AS unsupported_rules
-        FROM rules
-        WHERE excluded = 0
-        GROUP BY benchmark
-    """)
-    rows = cursor.fetchall()
-    conn.close()
+    session = SessionLocal()
+    benchmarks = session.query(Benchmark).all()
 
     result = []
-    for row in rows:
-        benchmark, btype,total, automated, unsupported = row
-        total = total or 0
-        automated = automated or 0
-        unsupported = unsupported or 0
+    for b in benchmarks:
+        total = len(b.rules)
+        automated = sum(1 for r in b.rules if not r.manual)
+        unsupported = sum(1 for r in b.rules if not r.manual and not r.supported)
         coverage = ((automated - unsupported) / total * 100) if total else 0
 
         result.append({
-            "benchmark": benchmark,
-            "type": btype,
+            "benchmark": b.name,
+            "type": b.benchmark_type,
             "total_rules": total,
             "automated_rules": automated,
             "unsupported_rules": unsupported,
             "coverage": round(coverage, 2)
         })
+
     return result
 
 class GenerateOvalsRequest(BaseModel):
     rule_ids: list[str]
 
 def build_merged_oval_from_files(oval_paths):
-    """
-    Takes a list of oval XML file paths.
-    Returns a merged <oval_definitions> lxml element
-    containing combined definitions, tests, objects, states, variables.
-    """
     NS_OVAL = "http://oval.mitre.org/XMLSchema/oval-definitions-5"
     nsmap = {None: NS_OVAL}
 
     root = ET.Element("{%s}oval_definitions" % NS_OVAL, nsmap=nsmap)
 
-    # Add <generator> section (from the first file)
     generator_added = False
-
-    # Map from ID → element
     id_map = defaultdict(dict)
 
     for path in oval_paths:
@@ -247,7 +258,6 @@ def build_merged_oval_from_files(oval_paths):
                     if el_id not in id_map[section_name]:
                         id_map[section_name][el_id] = el
 
-    # Now create merged sections
     for section_name in ["definitions", "tests", "objects", "states", "variables"]:
         if id_map[section_name]:
             sec_elem = ET.SubElement(root, f"{{{NS_OVAL}}}{section_name}")
@@ -270,8 +280,6 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
         oval_path = os.path.join(ovals_dir, f"{rule_id}.xml")
         if os.path.exists(oval_path):
             oval_files.append(oval_path)
-        else:
-            pass
 
     if not oval_files:
         raise HTTPException(status_code=404, detail="No edited OVAL files found for the requested rules.")
@@ -287,38 +295,38 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
         }
     )
 
-
-
-
 @app.get("/api/benchmarks/{benchmark}/rules")
 async def list_rules(benchmark: str):
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT rule_id, supported, sensor_file_generated FROM rules WHERE benchmark=? AND excluded=0", (benchmark,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"rule_id": row[0], "supported": bool(row[1]) if row[1] is not None else False,"sensor_file_generated":bool(row[2]) if row[2] is not None else False} for row in rows]
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
 
+    rules = session.query(Rule).filter(
+        Rule.benchmark_id == benchmark_obj.id,
+        Rule.excluded == 0
+    ).all()
+
+    return [
+        {
+            "rule_id": r.rule_id,
+            "supported": bool(r.supported) if r.supported is not None else False,
+            "sensor_file_generated": bool(r.sensor_file_generated) if r.sensor_file_generated is not None else False
+        }
+        for r in rules
+    ]
 
 @app.delete("/api/benchmarks/{benchmark}")
 async def delete_benchmark(benchmark: str):
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
 
-    # Check if benchmark exists
-    cursor.execute("SELECT COUNT(*) FROM rules WHERE benchmark=?", (benchmark,))
-    count = cursor.fetchone()[0]
-
-    if count == 0:
-        conn.close()
+    if not benchmark_obj:
         raise HTTPException(status_code=404, detail="Benchmark not found")
 
-    # Delete from DB
-    cursor.execute("DELETE FROM rules WHERE benchmark=?", (benchmark,))
-    conn.commit()
-    conn.close()
+    session.delete(benchmark_obj)
+    session.commit()
 
-    # Optional: delete benchmark folder from filesystem
     folder_path = os.path.join("data", benchmark)
     if os.path.exists(folder_path):
         shutil.rmtree(folder_path)
@@ -327,49 +335,40 @@ async def delete_benchmark(benchmark: str):
 
 @app.get("/api/benchmarks/{benchmark}/rules/{rule_id}")
 async def get_rule_oval(benchmark: str, rule_id: str):
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT oval_path FROM rules WHERE benchmark=? AND rule_id=?", (benchmark, rule_id))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        return PlainTextResponse("Benchmark not found", status_code=404)
+
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id
+    ).first()
+
+    if not rule:
         return PlainTextResponse("Rule not found", status_code=404)
-    oval_path = row[0]
+
+    oval_path = rule.oval_path
     with open(oval_path, "r", encoding="utf-8") as f:
         content = f.read()
     return JSONResponse({"rule_id": rule_id, "oval": content})
 
-
-
-
 @app.get("/api/benchmarks/{benchmark}/regex-issues")
 async def get_regex_issues(benchmark: str):
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        return PlainTextResponse("Benchmark not found", status_code=404)
 
-    query = """
-    SELECT ri.pattern
-    FROM regex_issues ri
-    JOIN rules r ON ri.rule_id = r.rule_id
-    WHERE r.benchmark = ?
-    ORDER BY r.rule_id, ri.id
-    """
-    cursor.execute(query, (benchmark,))
-    rows = cursor.fetchall()
-    conn.close()
+    patterns = []
+    for rule in benchmark_obj.rules:
+        for issue in rule.unsupported_regex:
+            patterns.append(issue.pattern)
 
-    # Generate simple tab-separated output
-    output_lines = []
-    for pattern in rows:
-        output_lines.append(f"{pattern[0]}")
-
-    output_lines = (set(output_lines))    
-
-    response_text = "\n".join(output_lines)
+    patterns = list(set(patterns))
+    response_text = "\n".join(patterns)
 
     return PlainTextResponse(response_text, media_type="text/plain")
-
-
 
 @app.post("/api/benchmarks/{benchmark}/rules/{rule_id}")
 async def save_rule_oval(benchmark: str, rule_id: str, request: Request):
@@ -379,25 +378,97 @@ async def save_rule_oval(benchmark: str, rule_id: str, request: Request):
     if oval_content is None:
         raise HTTPException(status_code=400, detail="Missing oval content")
 
-    # Look up oval_path in DB
-    conn = sqlite3.connect("data/stig.db")
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT oval_path FROM rules WHERE benchmark=? AND rule_id=?",
-        (benchmark, rule_id),
-    )
-    row = cursor.fetchone()
-    conn.close()
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
 
-    if not row:
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id
+    ).first()
+
+    if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
 
-    oval_path = row[0]
+    oval_path = rule.oval_path
     if not oval_path:
         raise HTTPException(status_code=404, detail="No oval path found for rule")
 
-    # Write new content
     with open(oval_path, "w", encoding="utf-8") as f:
         f.write(oval_content)
 
     return JSONResponse({"message": "Oval saved successfully"})
+
+
+
+
+
+class RemoteHostRequest(BaseModel):
+    benchmark_name: str
+    ip_address: str
+    username: str
+    password: str
+    os_type: str
+
+@app.post("/api/remote-hosts")
+async def add_remote_host(remote_host: RemoteHostRequest, db: Session = Depends(get_db)):
+    # Check if benchmark exists
+    benchmark = db.query(Benchmark).filter(Benchmark.name == remote_host.benchmark_name).first()
+    if not benchmark:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{remote_host.benchmark_name}' not found")
+
+    # Encrypt password
+    encrypted_pw = fernet.encrypt(remote_host.password.encode()).decode()
+
+    new_host = RemoteHost(
+        benchmark_id=benchmark.id,
+        ip_address=remote_host.ip_address,
+        username=remote_host.username,
+        password_encrypted=encrypted_pw,
+        os_type=remote_host.os_type
+    )
+
+    db.add(new_host)
+    db.commit()
+
+    return {"message": "Remote host saved successfully."}
+
+
+@app.get("/api/benchmarks/{benchmark_name}/remote-hosts")
+async def list_remote_hosts(benchmark_name: str, db: Session = Depends(get_db)):
+    benchmark = db.query(Benchmark).filter(Benchmark.name == benchmark_name).first()
+    if not benchmark:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_name}' not found")
+
+    hosts = benchmark.remote_hosts
+
+    result = []
+    for host in hosts:
+        result.append({
+            "id": host.id,
+            "ip_address": host.ip_address,
+            "username": host.username,
+            "os_type": host.os_type
+            # we deliberately do NOT return password_encrypted
+        })
+
+    return result
+
+
+@app.get("/api/rules/{rule_id}/hoststate")
+async def get_hoststate(rule_id: str):
+    session = SessionLocal()
+
+    rule = session.query(Rule).filter_by(rule_id=rule_id).first()
+    if not rule:
+        session.close()
+        raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
+
+    vci_result = session.query(VCIResult).filter_by(rule_id=rule.id).order_by(VCIResult.id.desc()).first()
+    session.close()
+
+    if not vci_result:
+        raise HTTPException(status_code=404, detail=f"No hoststate JSON found for rule {rule_id}")
+
+    return {"rule_id": rule_id, "hoststate_json": vci_result.json_output}

@@ -104,16 +104,27 @@ export async function saveOval(benchmark, ruleId, ovalContent) {
   return res.json();
 }
 
-export async function getHostState(benchmark, ruleId, ovalContent) {
-  const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/rules/${ruleId}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ oval: ovalContent }),
-  });
+export async function getHostState(benchmark, ruleId) {
+  const res = await fetch(`${BASE_URL}/rules/${ruleId}/hoststate`);
   if (!res.ok) {
     throw new Error(await res.text());
   }
+  return res.text();
+}
+
+
+export async function addRemoteHost(payload) {
+  const res = await fetch("/api/remote-hosts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getRemoteHosts(benchmark) {
+  const res = await fetch(`/api/benchmarks/${benchmark}/remote-hosts`);
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

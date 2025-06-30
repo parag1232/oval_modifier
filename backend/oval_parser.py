@@ -78,7 +78,7 @@ class OvalDSA:
 
     def _process_object(self, obj_id):
         obj_elem = self.element_by_id.get(obj_id)
-        if not obj_elem:
+        if obj_elem is None:
             return
         if obj_id not in self.nodes:
             self.nodes[obj_id] = GraphNode(obj_id, "object", obj_elem)

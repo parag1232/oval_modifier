@@ -9,6 +9,7 @@ import {
   downloadSingleRuleOval,
   saveOval,
   getHostState,
+  getRemoteHosts,
 } from "../api/api";
 
 import CodeMirror from "@uiw/react-codemirror";
@@ -66,14 +67,27 @@ function RuleBrowserPage() {
   const [hostStateModalOpen, setHostStateModalOpen] = useState(false);
   const [selectedHostStateRule, setSelectedHostStateRule] = useState("");
 
+  const [remoteHostExists, setRemoteHostExists] = useState(false);
+
   const navigate = useNavigate();
 
   const fetchRules = () => {
     getRules(benchmark).then(setRules);
   };
 
+  const fetchRemoteHostStatus = async () => {
+    try {
+      const hosts = await getRemoteHosts(benchmark);
+      setRemoteHostExists(hosts.length > 0);
+    } catch (err) {
+      console.error("Failed to fetch remote hosts:", err.message);
+      setRemoteHostExists(false);
+    }
+  };
+
   useEffect(() => {
     fetchRules();
+    fetchRemoteHostStatus();
   }, [benchmark]);
 
   const handleOpenRule = async (ruleId) => {
@@ -183,9 +197,16 @@ function RuleBrowserPage() {
 
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">
-        Rules for {benchmark}
-      </h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">
+          Rules for {benchmark}
+        </h1>
+        {remoteHostExists && (
+          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-300">
+            Remote Host Added
+          </span>
+        )}
+      </div>
 
       {/* Search and Actions */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
