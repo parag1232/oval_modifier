@@ -10,6 +10,7 @@ import {
   saveOval,
   getHostState,
   getRemoteHosts,
+  evaluateRules,
 } from "../api/api";
 
 import CodeMirror from "@uiw/react-codemirror";
@@ -195,17 +196,35 @@ function RuleBrowserPage() {
     }
   };
 
+  const handleEvaluateRules = async () => {
+    try {
+      await evaluateRules(benchmark);
+      alert("✅ Rules evaluated successfully!");
+      fetchRules();
+    } catch (err) {
+      alert("❌ Failed to evaluate rules: " + err.message);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <h1 className="text-2xl font-bold text-gray-800">
           Rules for {benchmark}
         </h1>
-        {remoteHostExists && (
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-300">
-            Remote Host Added
-          </span>
-        )}
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={handleEvaluateRules}
+            className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-md font-semibold"
+          >
+            Evaluate Rules
+          </button>
+          {remoteHostExists && (
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-300">
+              Remote Host Added
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Search and Actions */}

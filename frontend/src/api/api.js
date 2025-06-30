@@ -128,3 +128,14 @@ export async function getRemoteHosts(benchmark) {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+
+export async function evaluateRules(benchmark) {
+  const res = await fetch(`/api/benchmarks/${benchmark}/run-vci-debug`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}

@@ -17,6 +17,7 @@ from lxml import etree as ET
 from backend.disa_stig import parse_stig, generate_sensor_for_rule, parse_cis_stig
 from backend.database import init_db, SessionLocal
 from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost,VCIResult
+from backend.vci_executor import run_vci_on_remote
 from fastapi import Depends
 from cryptography.fernet import Fernet
 
@@ -472,3 +473,81 @@ async def get_hoststate(rule_id: str):
         raise HTTPException(status_code=404, detail=f"No hoststate JSON found for rule {rule_id}")
 
     return {"rule_id": rule_id, "hoststate_json": vci_result.json_output}
+
+
+def run_vci_for_rule_task(benchmark, rule_id):
+    session = SessionLocal()
+
+    rule_obj = session.query(Rule).filter_by(rule_id=rule_id).first()
+    if not rule_obj:
+        session.close()
+        print(f"⚠ Rule {rule_id} not found.")
+        return
+
+    benchmark_obj = session.query(Benchmark).filter_by(id=rule_obj.benchmark_id).first()
+    if not benchmark_obj:
+        session.close()
+        print(f"⚠ Benchmark not found for rule {rule_id}.")
+        return
+
+    sensorbin_path = os.path.join(
+        "data",
+        benchmark,
+        "sensorbin",
+        f"{rule_id}.bin"
+    )
+
+    if not os.path.exists(sensorbin_path):
+        session.close()
+        print(f"⚠ Sensorbin for rule {rule_id} not found at {sensorbin_path}. Skipping.")
+        return
+
+    try:
+        benchmark_dir = os.path.join("data", benchmark)
+        vci_output_dir = os.path.join(benchmark_dir, "vci_output")
+        os.makedirs(vci_output_dir, exist_ok=True)
+        local_output_path = os.path.join(vci_output_dir, f"{rule_id}.json")
+        json_op = run_vci_on_remote(rule_id, sensorbin_path,local_output_path)
+
+        vci_result = VCIResult(
+            rule_id=rule_obj.id,
+            json_output=json_op
+        )
+        session.add(vci_result)
+        session.commit()
+        print(f"✅ VCI debug done for rule {rule_id}")
+    except Exception as e:
+        print(f"❌ VCI run failed for rule {rule_id}: {e}")
+    finally:
+        session.close()
+
+
+@app.post("/api/benchmarks/{benchmark}/run-vci-debug")
+async def run_vci_debug_for_benchmark(
+    benchmark: str,
+    background_tasks: BackgroundTasks
+):
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        session.close()
+        raise HTTPException(status_code=404, detail=f"Benchmark {benchmark} not found.")
+
+    if not benchmark_obj.remote_hosts:
+        session.close()
+        raise HTTPException(status_code=400, detail=f"No remote host configured for benchmark {benchmark}.")
+
+    rules = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        excluded=0,
+        sensor_file_generated=1
+    ).all()
+    session.close()
+
+    if not rules:
+        return {"message": f"No sensor files found to run VCI for benchmark {benchmark}."}
+
+    for rule in rules:
+        background_tasks.add_task(run_vci_for_rule_task, benchmark, rule.rule_id)
+
+    return {"message": f"VCI execution scheduled for {len(rules)} rules for benchmark {benchmark}."}

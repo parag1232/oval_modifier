@@ -21,6 +21,8 @@ def run_vci_on_remote(rule_id_str, sensorbin_path,
                       remote_sensor_path="/tmp/sensor.bin",
                       remote_output_path="/tmp/output.json",
                       local_output_path=None):
+    if not local_output_path:
+        raise ValueError("local_output_path must be provided.")
 
     session = SessionLocal()
 
@@ -92,10 +94,18 @@ def run_on_linux(ip, user, password,
     # Create remote dir
     ssh.exec_command(f"mkdir -p {remote_vci_dir}")
 
-    # Upload VCIDEBUGCLI binary
-    local_vci_path = os.path.join(os.getcwd(), "VCIDEBUGCLI")
-    sftp.put(local_vci_path, remote_vci_path)
-    ssh.exec_command(f"chmod +x {remote_vci_path}")
+    # Check if VCIDEBUGCLI exists
+    stdin, stdout, stderr = ssh.exec_command(f"test -f {remote_vci_path}")
+    exit_status = stdout.channel.recv_exit_status()
+
+    if exit_status != 0:
+        # VCIDEBUGCLI not present — upload it
+        local_vci_path = os.path.join(os.getcwd(), "VCIDEBUGCLI")
+        sftp.put(local_vci_path, remote_vci_path)
+        ssh.exec_command(f"chmod +x {remote_vci_path}")
+        print(f"✅ Uploaded VCIDEBUGCLI to remote host")
+    else:
+        print(f"ℹ️ VCIDEBUGCLI already exists on remote host. Skipping upload.")
 
     # Upload sensorbin
     sftp.put(sensorbin_path, remote_sensor_path)
@@ -111,9 +121,6 @@ def run_on_linux(ip, user, password,
         ssh.close()
         raise Exception(f"VCIDEBUGCLI failed on remote Linux:\n{error_output}")
 
-    if not local_output_path:
-        local_output_path = os.path.join(os.getcwd(), f"{ip}_output.json")
-
     sftp.get(remote_output_path, local_output_path)
     print(f"✅ Downloaded output to {local_output_path}")
 
@@ -124,6 +131,7 @@ def run_on_linux(ip, user, password,
         json_text = f.read()
 
     return json_text
+
 
 def run_on_windows(ip, user, password,
                    sensorbin_path, remote_sensor_path,
@@ -144,17 +152,27 @@ def run_on_windows(ip, user, password,
     """
     session.run_ps(ps_create)
 
-    # Upload VCIDEBUGCLI.exe as base64
-    with open("VCIDEBUGCLI.exe", "rb") as f:
-        vci_data = f.read()
-    vci_b64 = base64.b64encode(vci_data).decode()
-
-    ps_vci = f"""
-    $b64 = "{vci_b64}"
-    $bytes = [System.Convert]::FromBase64String($b64)
-    [System.IO.File]::WriteAllBytes("{remote_vci_path}", $bytes)
+    # Check if VCIDEBUGCLI.exe exists
+    ps_test_vci = f"""
+    Test-Path "{remote_vci_path}"
     """
-    session.run_ps(ps_vci)
+    result_test = session.run_ps(ps_test_vci)
+
+    if result_test.status_code != 0 or result_test.std_out.decode().strip() == "False":
+        # Upload VCIDEBUGCLI.exe as base64
+        with open("VCIDEBUGCLI.exe", "rb") as f:
+            vci_data = f.read()
+        vci_b64 = base64.b64encode(vci_data).decode()
+
+        ps_vci = f"""
+        $b64 = "{vci_b64}"
+        $bytes = [System.Convert]::FromBase64String($b64)
+        [System.IO.File]::WriteAllBytes("{remote_vci_path}", $bytes)
+        """
+        session.run_ps(ps_vci)
+        print(f"✅ Uploaded VCIDEBUGCLI.exe to remote host.")
+    else:
+        print(f"ℹ️ VCIDEBUGCLI.exe already exists on remote host. Skipping upload.")
 
     # Upload sensor.bin as base64
     with open(sensorbin_path, "rb") as f:
@@ -185,9 +203,6 @@ def run_on_windows(ip, user, password,
         raise Exception(f"Failed reading JSON output from Windows:\n{result_json.std_err.decode()}")
 
     json_text = result_json.std_out.decode()
-
-    if not local_output_path:
-        local_output_path = os.path.join(os.getcwd(), f"{ip}_output.json")
 
     with open(local_output_path, "w", encoding="utf-8") as f:
         f.write(json_text)
