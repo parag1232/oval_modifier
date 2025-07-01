@@ -560,24 +560,12 @@ def run_genai_conversion_for_benchmark(benchmark_name: str, model_name: str):
 
     print(f"✅ Converted {total_converted} regexes for benchmark {benchmark_name}")
 
-@app.get("/api/benchmarks/{benchmark}/regex-tests")
-async def get_regex_tests(benchmark: str):
-    session = SessionLocal()
-
-    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
-    if not benchmark_obj:
-        return JSONResponse(status_code=404, content={"detail": "Benchmark not found"})
-
-    results = []
-    for rule in benchmark_obj.rules:
-        for ur in rule.unsupported_regex:
-            if ur.tests_json:
-                results.append({
-                    "original_regex": ur.pattern,
-                    "converted_regex": ur.processed_pattern,
-                    "tests": json.loads(ur.tests_json)
-                })
-
-    return results
+@app.post("/api/benchmarks/{benchmark}/process-unsupported-regex-ai")
+async def process_regexes_ai(benchmark: str, background_tasks: BackgroundTasks):
+    model_name = "cloud35-sonnet-v2"    # or whichever you want as default
+    background_tasks.add_task(run_genai_conversion_for_benchmark, benchmark, model_name)
+    return {
+        "message": f"Started GenAI regex conversion task for benchmark {benchmark}"
+    }
 
 

@@ -143,7 +143,7 @@ export async function evaluateRules(benchmark) {
 
 
 export async function processRegex(benchmark) {
-  const res = await fetch(`/api/benchmarks/${benchmark}/regex-tests`, {
+  const res = await fetch(`/api/benchmarks/${benchmark}/process-unsupported-regex-ai`, {
     method: "POST",
   });
   if (!res.ok) {
