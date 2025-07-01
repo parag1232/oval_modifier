@@ -68,5 +68,7 @@ class UnsupportedRegex(Base):
     object_id = Column(String)
     pattern = Column(Text)
     reason = Column(Text)
+    processed_pattern = Column(Text)    # NEW
+    tests_json = Column(Text)           # NEW
 
     rule = relationship("Rule", back_populates="unsupported_regex")

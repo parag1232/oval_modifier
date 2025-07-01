@@ -17,10 +17,13 @@ from lxml import etree as ET
 from backend.disa_stig import parse_stig, generate_sensor_for_rule, parse_cis_stig
 from backend.database import init_db, SessionLocal
 from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost,VCIResult
-from backend.vci_executor import run_vci_on_remote
 from fastapi import Depends
 from cryptography.fernet import Fernet
 from backend.vci_executor import *
+from fastapi import BackgroundTasks
+from backend.genai_regex_replacer import call_genai_api
+from backend.models import UnsupportedRegex, Benchmark
+from backend.database import SessionLocal
 
 app = FastAPI()
 
@@ -476,51 +479,7 @@ async def get_hoststate(rule_id: str):
     return {"rule_id": rule_id, "hoststate_json": vci_result.json_output}
 
 
-def run_vci_for_rule_task(benchmark, rule_id):
-    session = SessionLocal()
 
-    rule_obj = session.query(Rule).filter_by(rule_id=rule_id).first()
-    if not rule_obj:
-        session.close()
-        print(f"⚠ Rule {rule_id} not found.")
-        return
-
-    benchmark_obj = session.query(Benchmark).filter_by(id=rule_obj.benchmark_id).first()
-    if not benchmark_obj:
-        session.close()
-        print(f"⚠ Benchmark not found for rule {rule_id}.")
-        return
-
-    sensorbin_path = os.path.join(
-        "data",
-        benchmark,
-        "sensorbin",
-        f"{rule_id}.bin"
-    )
-
-    if not os.path.exists(sensorbin_path):
-        session.close()
-        print(f"⚠ Sensorbin for rule {rule_id} not found at {sensorbin_path}. Skipping.")
-        return
-
-    try:
-        benchmark_dir = os.path.join("data", benchmark)
-        vci_output_dir = os.path.join(benchmark_dir, "vci_output")
-        os.makedirs(vci_output_dir, exist_ok=True)
-        local_output_path = os.path.join(vci_output_dir, f"{rule_id}.json")
-        json_op = run_vci_on_remote(rule_id, sensorbin_path,local_output_path)
-
-        vci_result = VCIResult(
-            rule_id=rule_obj.id,
-            json_output=json_op
-        )
-        session.add(vci_result)
-        session.commit()
-        print(f"✅ VCI debug done for rule {rule_id}")
-    except Exception as e:
-        print(f"❌ VCI run failed for rule {rule_id}: {e}")
-    finally:
-        session.close()
 
 
 @app.post("/api/benchmarks/{benchmark}/run-vci-debug")
@@ -563,4 +522,62 @@ async def run_vci_debug_for_benchmark(benchmark: str):
     save_batch_results_to_db(benchmark, result_paths)
 
     return {"message": f"VCI executed for {len(result_paths)} rules for benchmark {benchmark}."}
+
+
+
+
+def run_genai_conversion_for_benchmark(benchmark_name: str, model_name: str):
+    session = SessionLocal()
+
+    benchmark = session.query(Benchmark).filter_by(name=benchmark_name).first()
+    if not benchmark:
+        print(f"❌ Benchmark not found: {benchmark_name}")
+        session.close()
+        return
+
+    total_converted = 0
+
+    for rule in benchmark.rules:
+        for regex_obj in rule.unsupported_regex:
+            if regex_obj.processed_pattern:
+                continue
+
+            print(f"🔍 Processing regex: {regex_obj.pattern}")
+
+            try:
+                result = call_genai_api(model_name, regex_obj.pattern)
+
+                regex_obj.processed_pattern = result["converted_regex"]
+                regex_obj.tests_json = json.dumps(result.get("tests", []))
+
+                total_converted += 1
+
+            except Exception as e:
+                print(f"❌ Error processing regex {regex_obj.pattern}: {e}")
+
+    session.commit()
+    session.close()
+
+    print(f"✅ Converted {total_converted} regexes for benchmark {benchmark_name}")
+
+@app.get("/api/benchmarks/{benchmark}/regex-tests")
+async def get_regex_tests(benchmark: str):
+    session = SessionLocal()
+
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        return JSONResponse(status_code=404, content={"detail": "Benchmark not found"})
+
+    results = []
+    for rule in benchmark_obj.rules:
+        for ur in rule.unsupported_regex:
+            if ur.tests_json:
+                results.append({
+                    "original_regex": ur.pattern,
+                    "converted_regex": ur.processed_pattern,
+                    "tests": json.loads(ur.tests_json)
+                })
+
+    return results
+
 

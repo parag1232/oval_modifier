@@ -8,7 +8,6 @@ from backend.sensorbin_generator import *
 from datetime import datetime
 from backend.database import SessionLocal
 from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost, VCIResult
-from backend.vci_executor import run_vci_on_remote
 
 PYTHON_PATH = os.getenv("PYTHON_PATH")
 BUILD_CHANNEL_FILE = os.getenv("BUILD_CHANNEL_FILE")
@@ -48,10 +47,6 @@ def generate_sensor_for_rule(benchmark, benchmark_dir, rule_id, definition_id, o
             rule_id,
             sensorbin_dir
         )
-        # if sensor_bin_path:
-        #     run_vci_on_remote(rule_id, sensor_bin_path)
-
-        # Update sensor_file_generated in DB
         benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
         if benchmark_obj:
             rule_obj = session.query(Rule).filter_by(
@@ -61,15 +56,6 @@ def generate_sensor_for_rule(benchmark, benchmark_dir, rule_id, definition_id, o
             if rule_obj:
                 rule_obj.sensor_file_generated = 1
                 session.commit()
-        if benchmark_obj and benchmark_obj.remote_hosts:
-            print(f"✅ Remote host found for benchmark {benchmark}. Running VCI debug...")
-            json_op = run_vci_on_remote(rule_id, sensor_bin_path)
-            vci_result = VCIResult(
-                rule_id=rule_obj.id,
-                json_output=json_op
-            )
-            session.add(vci_result)
-            session.commit()
         else:
             print(f"ℹ️ No remote host configured for benchmark {benchmark}. Skipping VCI debug.")        
 

@@ -1,0 +1,35 @@
+You are not supposed to use any of below patterns
+```
+\h
+\b
+?=
+?!
+?<=
+?<!
+```
+
+The generate regex
+1. should not have positive or negative lookahead
+2. should not use any of prohibited patterns
+3. should replace the unsupported patterns with equivalent supported patterns
+4. should not contain pattern [^A-Za-z0-9]
+5. should convert all capturing groups into non-capturing groups using ?: operator
+
+I am providing you a sample dataset that I had converted manually before. Original regex and converted regex is separated by a tab.
+```
+(?i)^\h*([^#\n\r]+\h*)?\bNOPASSWD\b(.*)?$	(?i)^\s*(?:[^#\n\r]+\s+)?NOPASSWD(.*)?$
+(?i)^\h*ForwardToSyslog\h*=\h*yes\b	(?i)^\s*ForwardToSyslog\s*=\s*yes[ \t]*(#.*)?$
+^\h*enabled\h*=\h*0\b	[ \t]*enabled[ \t]*=[ \t]*0[^0-9]
+^[^#:\n\r]+:([^\!\*xX:\n\r][^:\n\r]*|\h*):[^:\n\r]*:[^:\n\r]*:[^:\n\r]*:([0-6]|-1):[^:\n\r]*:[^:\n\r]*:[^:\n\r]*\h*$	^[^#:\n\r]+:(?:[^\!\*xX:\n\r][^:\n\r]*|[ \t]*):[^:\n\r]*:[^:\n\r]*:[^:\n\r]*:(?:[0-6]|-1):[^:\n\r]*:[^:\n\r]*:[^:\n\r]*[ \t]*$
+^\s*(?i)USERGROUPS_ENAB\s*"?no"?\b	\s*(?i)USERGROUPS_ENAB\s*"?no"?
+^\h*admin_space_left_action\h*=\h*(halt|single)\b.*$	^\s*admin_space_left_action\s*=\s*(halt|single).*$
+^(?i)\h*PermitRootLogin\h+"?(yes|prohibit-password|forced-commands-only)"?\b	^(?i)\s*PermitRootLogin\s+"?(yes|prohibit-password|forced-commands-only)"?$
+^(?i)\h*PermitEmptyPasswords\h+\"?yes\b	^(?i)\s*PermitEmptyPasswords\s+\"?yes($|[ \t])
+(?i)^\h*ClientAliveCountMax\h+"?0\b	(?i)^[ \t]*ClientAliveCountMax[ \t]+"?0([ \t]|$)
+(?i)^\h*([^#\n\r]+\h+)?\!authenticate\b(\.*)?$	(?i)\s*([^#\n\r]+\s+)?\!authenticate(?:\.*)?
+```
+
+I am providing you a JSON array which contains list of PERL regex that you should convert to Go compliant. You should generate a JSON array. Element in array looks like should have two keys.
+First key is "original_regex" which is from JSON array I provided. Second key is "converted_regex" which you generated as replacement of "original_regex". Third key is "tests" which is an array. Tests array contains 10 patterns for testing the converted_regex.
+
+I don't want one extra word apart from JSON array.

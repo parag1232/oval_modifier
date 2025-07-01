@@ -139,3 +139,15 @@ export async function evaluateRules(benchmark) {
   }
   return res.json();
 }
+
+
+
+export async function processRegex(benchmark) {
+  const res = await fetch(`/api/benchmarks/${benchmark}/regex-tests`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}
