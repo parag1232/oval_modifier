@@ -17,73 +17,23 @@ def decrypt_password(encrypted_pw: str) -> str:
     return fernet.decrypt(encrypted_pw.encode()).decode()
 
 
-def run_vci_on_remote(rule_id_str, sensorbin_path,
-                      remote_sensor_path="/tmp/sensor.bin",
-                      remote_output_path="/tmp/output.json",
-                      local_output_path=None):
-    if not local_output_path:
-        raise ValueError("local_output_path must be provided.")
+def run_vci_batch_on_linux(ip, user, password, rule_sensor_map, benchmark_dir):
+    """
+    Executes VCIDEBUGCLI for multiple rules over a single SSH session.
 
-    session = SessionLocal()
+    rule_sensor_map:
+        dict { rule_id -> sensorbin_path }
 
-    # Fetch rule via ORM
-    rule = session.query(Rule).filter_by(rule_id=rule_id_str).first()
-    if not rule:
-        session.close()
-        raise Exception(f"No rule found for rule_id {rule_id_str}")
+    benchmark_dir:
+        benchmark data dir under /data
 
-    # Find remote host for benchmark
-    benchmark = rule.benchmark
-    if not benchmark.remote_hosts:
-        session.close()
-        raise Exception(f"No remote host configured for benchmark {benchmark.name}")
-
-    remote_host = benchmark.remote_hosts[0]
-
-    ip_address = remote_host.ip_address
-    username = remote_host.username
-    encrypted_pw = remote_host.password_encrypted
-    os_type = remote_host.os_type
-
-    plaintext_pw = decrypt_password(encrypted_pw)
-
-    if os_type.lower() == "linux":
-        json_text = run_on_linux(
-            ip_address, username, plaintext_pw,
-            sensorbin_path, remote_sensor_path,
-            remote_output_path, local_output_path
-        )
-    elif os_type.lower() == "windows":
-        json_text = run_on_windows(
-            ip_address, username, plaintext_pw,
-            sensorbin_path, remote_sensor_path,
-            remote_output_path, local_output_path
-        )
-    else:
-        session.close()
-        raise Exception(f"Unsupported OS type: {os_type}")
-
-    # Save output to ORM
-    vci_result = VCIResult(
-        rule_id=rule.id,
-        json_output=json_text
-    )
-    session.add(vci_result)
-    session.commit()
-    session.close()
-
-    return json_text
-
-
-def run_on_linux(ip, user, password,
-                 sensorbin_path, remote_sensor_path,
-                 remote_output_path, local_output_path):
+    Returns:
+        dict { rule_id -> local_output_path }
+    """
 
     remote_home_dir = f"/home/{user}"
     remote_vci_dir = os.path.join(remote_home_dir, "vcidebug_testing")
     remote_vci_path = os.path.join(remote_vci_dir, "VCIDEBUGCLI")
-    remote_sensor_path = os.path.join(remote_vci_dir, "sensor.bin")
-    remote_output_path = os.path.join(remote_vci_dir, "output.json")
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -94,72 +44,83 @@ def run_on_linux(ip, user, password,
     # Create remote dir
     ssh.exec_command(f"mkdir -p {remote_vci_dir}")
 
-    # Check if VCIDEBUGCLI exists
+    # Check if VCIDEBUGCLI already exists
     stdin, stdout, stderr = ssh.exec_command(f"test -f {remote_vci_path}")
     exit_status = stdout.channel.recv_exit_status()
 
     if exit_status != 0:
-        # VCIDEBUGCLI not present — upload it
+        # Upload VCIDEBUGCLI binary
         local_vci_path = os.path.join(os.getcwd(), "VCIDEBUGCLI")
         sftp.put(local_vci_path, remote_vci_path)
         ssh.exec_command(f"chmod +x {remote_vci_path}")
-        print(f"✅ Uploaded VCIDEBUGCLI to remote host")
+        print(f"✅ Uploaded VCIDEBUGCLI to remote host.")
     else:
         print(f"ℹ️ VCIDEBUGCLI already exists on remote host. Skipping upload.")
 
-    # Upload sensorbin
-    sftp.put(sensorbin_path, remote_sensor_path)
-    print(f"✅ Uploaded sensorbin to {remote_sensor_path}")
+    vci_output_dir = os.path.join(benchmark_dir, "vci_output")
+    os.makedirs(vci_output_dir, exist_ok=True)
 
-    # Run VCIDEBUGCLI
-    cmd = f"{remote_vci_path} --hoststate --src {remote_sensor_path} --dest {remote_output_path}"
-    stdin, stdout, stderr = ssh.exec_command(cmd)
-    exit_status = stdout.channel.recv_exit_status()
+    result_paths = {}
 
-    if exit_status != 0:
-        error_output = stderr.read().decode()
-        ssh.close()
-        raise Exception(f"VCIDEBUGCLI failed on remote Linux:\n{error_output}")
+    for rule_id, sensorbin_path in rule_sensor_map.items():
+        remote_sensor_path = os.path.join(remote_vci_dir, "sensor.bin")
+        remote_output_path = os.path.join(remote_vci_dir, "output.json")
 
-    sftp.get(remote_output_path, local_output_path)
-    print(f"✅ Downloaded output to {local_output_path}")
+        # Upload sensor.bin
+        sftp.put(sensorbin_path, remote_sensor_path)
+        print(f"✅ Uploaded sensorbin for rule {rule_id}")
+
+        # Run VCIDEBUGCLI
+        cmd = f"{remote_vci_path} --hoststate --src {remote_sensor_path} --dest {remote_output_path}"
+        stdin, stdout, stderr = ssh.exec_command(cmd)
+        exit_status = stdout.channel.recv_exit_status()
+
+        if exit_status != 0:
+            error_output = stderr.read().decode()
+            print(f"❌ VCIDEBUGCLI failed for rule {rule_id}:\n{error_output}")
+            continue
+
+        local_output_path = os.path.join(vci_output_dir, f"{rule_id}.json")
+        sftp.get(remote_output_path, local_output_path)
+        print(f"✅ Downloaded VCI output for rule {rule_id} to {local_output_path}")
+
+        result_paths[rule_id] = local_output_path
 
     sftp.close()
     ssh.close()
 
-    with open(local_output_path, "r", encoding="utf-8") as f:
-        json_text = f.read()
-
-    return json_text
+    return result_paths
 
 
-def run_on_windows(ip, user, password,
-                   sensorbin_path, remote_sensor_path,
-                   remote_output_path, local_output_path):
+def run_vci_batch_on_windows(ip, user, password, rule_sensor_map, benchmark_dir):
+    """
+    Batch execution on Windows is trickier due to WinRM session limits.
+    This function re-establishes session for each rule but skips repeated VCIDEBUGCLI upload.
+    """
 
     remote_vci_dir = f"C:\\Users\\{user}\\vcidebug_testing"
     remote_vci_path = f"{remote_vci_dir}\\VCIDEBUGCLI.exe"
-    remote_sensor_path = f"{remote_vci_dir}\\sensor.bin"
-    remote_output_path = f"{remote_vci_dir}\\output.json"
 
+    # Check if VCIDEBUGCLI already exists
     session = winrm.Session(target=ip,
                             auth=(user, password),
                             transport='ntlm')
 
-    # Create remote folder
     ps_create = f"""
     New-Item -Path "{remote_vci_dir}" -ItemType Directory -Force
     """
     session.run_ps(ps_create)
 
-    # Check if VCIDEBUGCLI.exe exists
     ps_test_vci = f"""
     Test-Path "{remote_vci_path}"
     """
     result_test = session.run_ps(ps_test_vci)
 
-    if result_test.status_code != 0 or result_test.std_out.decode().strip() == "False":
-        # Upload VCIDEBUGCLI.exe as base64
+    needs_upload = True
+    if result_test.status_code == 0 and result_test.std_out.decode().strip() == "True":
+        needs_upload = False
+
+    if needs_upload:
         with open("VCIDEBUGCLI.exe", "rb") as f:
             vci_data = f.read()
         vci_b64 = base64.b64encode(vci_data).decode()
@@ -174,39 +135,99 @@ def run_on_windows(ip, user, password,
     else:
         print(f"ℹ️ VCIDEBUGCLI.exe already exists on remote host. Skipping upload.")
 
-    # Upload sensor.bin as base64
-    with open(sensorbin_path, "rb") as f:
-        sensor_data = f.read()
-    sensor_b64 = base64.b64encode(sensor_data).decode()
+    session.close()
 
-    ps_sensor = f"""
-    $b64 = "{sensor_b64}"
-    $bytes = [System.Convert]::FromBase64String($b64)
-    [System.IO.File]::WriteAllBytes("{remote_sensor_path}", $bytes)
+    vci_output_dir = os.path.join(benchmark_dir, "vci_output")
+    os.makedirs(vci_output_dir, exist_ok=True)
+
+    result_paths = {}
+
+    for rule_id, sensorbin_path in rule_sensor_map.items():
+        session = winrm.Session(target=ip,
+                                auth=(user, password),
+                                transport='ntlm')
+
+        remote_sensor_path = f"{remote_vci_dir}\\sensor.bin"
+        remote_output_path = f"{remote_vci_dir}\\output.json"
+
+        # Upload sensor.bin
+        with open(sensorbin_path, "rb") as f:
+            sensor_data = f.read()
+        sensor_b64 = base64.b64encode(sensor_data).decode()
+
+        ps_sensor = f"""
+        $b64 = "{sensor_b64}"
+        $bytes = [System.Convert]::FromBase64String($b64)
+        [System.IO.File]::WriteAllBytes("{remote_sensor_path}", $bytes)
+        """
+        session.run_ps(ps_sensor)
+
+        print(f"✅ Sensorbin written for rule {rule_id} to Windows: {remote_sensor_path}")
+
+        cmd = f'"{remote_vci_path}" --hoststate --src "{remote_sensor_path}" --dest "{remote_output_path}"'
+        result = session.run_cmd(cmd)
+
+        if result.status_code != 0:
+            print(f"❌ VCIDEBUGCLI failed for rule {rule_id}:\n{result.std_err.decode()}")
+            session.close()
+            continue
+
+        ps_read_json = f"""
+        Get-Content "{remote_output_path}" | Out-String
+        """
+        result_json = session.run_ps(ps_read_json)
+
+        if result_json.status_code != 0:
+            print(f"❌ Failed reading JSON for rule {rule_id}:\n{result_json.std_err.decode()}")
+            session.close()
+            continue
+
+        json_text = result_json.std_out.decode()
+
+        local_output_path = os.path.join(vci_output_dir, f"{rule_id}.json")
+        with open(local_output_path, "w", encoding="utf-8") as f:
+            f.write(json_text)
+
+        print(f"✅ Downloaded Windows JSON output for rule {rule_id} to {local_output_path}")
+
+        result_paths[rule_id] = local_output_path
+
+        session.close()
+
+    return result_paths
+
+
+def save_batch_results_to_db(benchmark_name, result_paths):
     """
-    session.run_ps(ps_sensor)
-
-    print(f"✅ Sensorbin written to Windows: {remote_sensor_path}")
-
-    cmd = f'"{remote_vci_path}" --hoststate --src "{remote_sensor_path}" --dest "{remote_output_path}"'
-    result = session.run_cmd(cmd)
-
-    if result.status_code != 0:
-        raise Exception(f"VCIDEBUGCLI failed on remote Windows:\n{result.std_err.decode()}")
-
-    ps_read_json = f"""
-    Get-Content "{remote_output_path}" | Out-String
+    After running a batch VCI job, call this to save results to the DB.
     """
-    result_json = session.run_ps(ps_read_json)
 
-    if result_json.status_code != 0:
-        raise Exception(f"Failed reading JSON output from Windows:\n{result_json.std_err.decode()}")
+    session = SessionLocal()
 
-    json_text = result_json.std_out.decode()
+    benchmark_obj = session.query(Rule.benchmark).filter_by(name=benchmark_name).first()
+    if not benchmark_obj:
+        session.close()
+        raise Exception(f"Benchmark {benchmark_name} not found.")
 
-    with open(local_output_path, "w", encoding="utf-8") as f:
-        f.write(json_text)
+    for rule_id, json_path in result_paths.items():
+        rule_obj = session.query(Rule).filter_by(
+            benchmark_id=benchmark_obj.id,
+            rule_id=rule_id
+        ).first()
 
-    print(f"✅ Downloaded Windows JSON output to {local_output_path}")
+        if not rule_obj:
+            print(f"⚠️ Rule {rule_id} not found in DB. Skipping.")
+            continue
 
-    return json_text
+        with open(json_path, "r", encoding="utf-8") as f:
+            json_text = f.read()
+
+        vci_result = VCIResult(
+            rule_id=rule_obj.id,
+            json_output=json_text
+        )
+        session.add(vci_result)
+        session.commit()
+        print(f"✅ Saved VCI result to DB for rule {rule_id}")
+
+    session.close()

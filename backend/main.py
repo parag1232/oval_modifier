@@ -20,6 +20,7 @@ from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost,VCIResu
 from backend.vci_executor import run_vci_on_remote
 from fastapi import Depends
 from cryptography.fernet import Fernet
+from backend.vci_executor import *
 
 app = FastAPI()
 
@@ -523,31 +524,43 @@ def run_vci_for_rule_task(benchmark, rule_id):
 
 
 @app.post("/api/benchmarks/{benchmark}/run-vci-debug")
-async def run_vci_debug_for_benchmark(
-    benchmark: str,
-    background_tasks: BackgroundTasks
-):
+async def run_vci_debug_for_benchmark(benchmark: str):
     session = SessionLocal()
-    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    benchmark_obj = session.query(Rule.benchmark).filter_by(name=benchmark).first()
     if not benchmark_obj:
         session.close()
         raise HTTPException(status_code=404, detail=f"Benchmark {benchmark} not found.")
 
-    if not benchmark_obj.remote_hosts:
-        session.close()
-        raise HTTPException(status_code=400, detail=f"No remote host configured for benchmark {benchmark}.")
+    remote_host = benchmark_obj.remote_hosts[0]
+    ip = remote_host.ip_address
+    username = remote_host.username
+    password = decrypt_password(remote_host.password_encrypted)
+    os_type = remote_host.os_type.lower()
 
     rules = session.query(Rule).filter_by(
         benchmark_id=benchmark_obj.id,
         excluded=0,
         sensor_file_generated=1
     ).all()
+
+    benchmark_dir = os.path.join("data", benchmark)
+
+    rule_sensor_map = {}
+    for rule in rules:
+        sensorbin_path = os.path.join(benchmark_dir, "sensorbin", f"{rule.rule_id}.bin")
+        if os.path.exists(sensorbin_path):
+            rule_sensor_map[rule.rule_id] = sensorbin_path
+
     session.close()
 
-    if not rules:
-        return {"message": f"No sensor files found to run VCI for benchmark {benchmark}."}
+    if os_type == "linux":
+        result_paths = run_vci_batch_on_linux(ip, username, password, rule_sensor_map, benchmark_dir)
+    elif os_type == "windows":
+        result_paths = run_vci_batch_on_windows(ip, username, password, rule_sensor_map, benchmark_dir)
+    else:
+        raise HTTPException(status_code=400, detail="Batch VCI not implemented for this OS.")
 
-    for rule in rules:
-        background_tasks.add_task(run_vci_for_rule_task, benchmark, rule.rule_id)
+    save_batch_results_to_db(benchmark, result_paths)
 
-    return {"message": f"VCI execution scheduled for {len(rules)} rules for benchmark {benchmark}."}
+    return {"message": f"VCI executed for {len(result_paths)} rules for benchmark {benchmark}."}
+
