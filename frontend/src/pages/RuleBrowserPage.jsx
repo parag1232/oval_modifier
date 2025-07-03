@@ -1,4 +1,3 @@
-// RuleBrowserPage.jsx
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -11,11 +10,14 @@ import {
   getHostState,
   getRemoteHosts,
   evaluateRules,
+  getXccdf,
+  saveXccdf,
+  getRulesByObject, // ✅ NEW
 } from "../api/api";
 
 import CodeMirror from "@uiw/react-codemirror";
 import { xml } from "@codemirror/lang-xml";
-import { json } from "@codemirror/lang-json"; // ✅ NEW
+import { json } from "@codemirror/lang-json";
 import beautify from "js-beautify";
 
 function Modal({ open, onClose, title, children, onSave }) {
@@ -58,8 +60,10 @@ function RuleBrowserPage() {
   const { benchmark } = useParams();
   const [rules, setRules] = useState([]);
   const [search, setSearch] = useState("");
+  const [objectSearch, setObjectSearch] = useState(""); // ✅ NEW
   const [selectedRule, setSelectedRule] = useState("");
   const [oval, setOval] = useState("");
+  const [xccdf, setXccdf] = useState("");
   const [selected, setSelected] = useState([]);
   const [sortAsc, setSortAsc] = useState(true);
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
@@ -68,6 +72,9 @@ function RuleBrowserPage() {
   const [hostStateContent, setHostStateContent] = useState("");
   const [hostStateModalOpen, setHostStateModalOpen] = useState(false);
   const [selectedHostStateRule, setSelectedHostStateRule] = useState("");
+
+  const [xccdfModalOpen, setXccdfModalOpen] = useState(false);
+  const [xccdfSaveStatus, setXccdfSaveStatus] = useState("");
 
   const [remoteHostExists, setRemoteHostExists] = useState(false);
 
@@ -92,6 +99,19 @@ function RuleBrowserPage() {
     fetchRemoteHostStatus();
   }, [benchmark]);
 
+  const handleFilterByObject = async () => {
+    if (!objectSearch.trim()) {
+      fetchRules();
+      return;
+    }
+    try {
+      const result = await getRulesByObject(benchmark, objectSearch.trim());
+      setRules(result);
+    } catch (err) {
+      alert("Failed to fetch rules by object: " + err.message);
+    }
+  };
+
   const handleOpenRule = async (ruleId) => {
     const res = await getOval(benchmark, ruleId);
     const formatted = beautify.html(res.oval, {
@@ -104,11 +124,20 @@ function RuleBrowserPage() {
     setSaveStatus("");
   };
 
-  const handleDownloadRuleOval = async (ruleId) => {
+  const handleOpenXccdf = async (ruleId) => {
     try {
-      await downloadSingleRuleOval(benchmark, ruleId);
+      const res = await getXccdf(benchmark, ruleId);
+      const formatted = beautify.html(res.xccdf || "", {
+        indent_size: 2,
+        wrap_line_length: 120,
+        unformatted: [],
+      });
+      setXccdf(formatted);
+      setSelectedRule(ruleId);
+      setXccdfModalOpen(true);
+      setXccdfSaveStatus("");
     } catch (err) {
-      alert("Failed to download rule OVAL: " + err.message);
+      alert("Failed to fetch XCCDF: " + err.message);
     }
   };
 
@@ -120,6 +149,28 @@ function RuleBrowserPage() {
       setTimeout(() => setSelectedRule(""), 1000);
     } catch (err) {
       setSaveStatus("❌ Failed to save OVAL: " + err.message);
+    }
+  };
+
+  const handleSaveXccdf = async () => {
+    try {
+      await saveXccdf(benchmark, selectedRule, xccdf);
+      setXccdfSaveStatus("✅ XCCDF saved successfully.");
+      fetchRules();
+      setTimeout(() => {
+        setXccdfModalOpen(false);
+        setSelectedRule("");
+      }, 1000);
+    } catch (err) {
+      setXccdfSaveStatus("❌ Failed to save XCCDF: " + err.message);
+    }
+  };
+
+  const handleDownloadRuleOval = async (ruleId) => {
+    try {
+      await downloadSingleRuleOval(benchmark, ruleId);
+    } catch (err) {
+      alert("Failed to download rule OVAL: " + err.message);
     }
   };
 
@@ -229,15 +280,34 @@ function RuleBrowserPage() {
         </div>
       </div>
 
-      {/* Search and Actions */}
+      {/* Search and Object Filter */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-        <input
-          type="text"
-          placeholder="Search Rule ID"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="border border-gray-300 rounded-md px-4 py-2 w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+        <div className="flex flex-col md:flex-row gap-2 w-full">
+          <input
+            type="text"
+            placeholder="Search Rule ID"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-md px-4 py-2 w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {/* ✅ NEW - Object filter */}
+          <div className="flex gap-2 w-full md:w-auto">
+            <input
+              type="text"
+              placeholder="Filter by Object name"
+              value={objectSearch}
+              onChange={(e) => setObjectSearch(e.target.value)}
+              className="border border-gray-300 rounded-md px-4 py-2 w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleFilterByObject}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-semibold"
+            >
+              Filter
+            </button>
+          </div>
+        </div>
+
         <div className="flex flex-wrap gap-3">
           <button
             className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md font-semibold disabled:opacity-50"
@@ -262,12 +332,11 @@ function RuleBrowserPage() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="overflow-auto rounded-lg border border-gray-200 shadow-sm">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider"></th>
+              <th></th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                 Rule ID
               </th>
@@ -304,45 +373,32 @@ function RuleBrowserPage() {
                     className="h-4 w-4 text-blue-600"
                   />
                 </td>
-                <td
-                  className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 max-w-[200px] overflow-hidden truncate"
-                  title={rule.rule_id}
-                >
+                <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 max-w-[200px] overflow-hidden truncate" title={rule.rule_id}>
                   {rule.rule_id}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm">
                   {rule.supported ? (
-                    <span className="text-green-700 font-semibold">
-                      Supported ✅
-                    </span>
+                    <span className="text-green-700 font-semibold">Supported ✅</span>
                   ) : (
-                    <span className="text-red-600 font-semibold">
-                      Unsupported ❌
-                    </span>
+                    <span className="text-red-600 font-semibold">Unsupported ❌</span>
                   )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm">
                   {rule.sensor_file_generated ? (
-                    <span className="text-green-700 font-semibold">
-                      Generated ✅
-                    </span>
+                    <span className="text-green-700 font-semibold">Generated ✅</span>
                   ) : (
-                    <span className="text-red-600 font-semibold">
-                      Not Generated ❌
-                    </span>
+                    <span className="text-red-600 font-semibold">Not Generated ❌</span>
                   )}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm">
                   {rule.evaluation ? (
-                    <span
-                      className={
-                        rule.evaluation === "Passed"
-                          ? "text-green-700 font-semibold"
-                          : rule.evaluation === "Failed"
-                          ? "text-red-600 font-semibold"
-                          : "text-yellow-600 font-semibold"
-                      }
-                    >
+                    <span className={
+                      rule.evaluation === "Passed"
+                        ? "text-green-700 font-semibold"
+                        : rule.evaluation === "Failed"
+                        ? "text-red-600 font-semibold"
+                        : "text-yellow-600 font-semibold"
+                    }>
                       {rule.evaluation}
                     </span>
                   ) : (
@@ -368,6 +424,12 @@ function RuleBrowserPage() {
                   >
                     Download OVAL
                   </button>
+                  <button
+                    className="bg-pink-600 hover:bg-pink-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                    onClick={() => handleOpenXccdf(rule.rule_id)}
+                  >
+                    View XCCDF
+                  </button>
                 </td>
               </tr>
             ))}
@@ -375,9 +437,8 @@ function RuleBrowserPage() {
         </table>
       </div>
 
-      {/* OVAL Modal */}
       <Modal
-        open={!!selectedRule}
+        open={!!selectedRule && !xccdfModalOpen}
         onClose={() => setSelectedRule("")}
         title={`OVAL for ${selectedRule}`}
         onSave={handleSaveOval}
@@ -394,7 +455,6 @@ function RuleBrowserPage() {
         )}
       </Modal>
 
-      {/* HostState Modal */}
       <Modal
         open={hostStateModalOpen}
         onClose={() => setHostStateModalOpen(false)}
@@ -406,6 +466,27 @@ function RuleBrowserPage() {
           theme="dark"
           extensions={[json()]}
         />
+      </Modal>
+
+      <Modal
+        open={xccdfModalOpen}
+        onClose={() => {
+          setXccdfModalOpen(false);
+          setSelectedRule("");
+        }}
+        title={`XCCDF for ${selectedRule}`}
+        onSave={handleSaveXccdf}
+      >
+        <CodeMirror
+          value={xccdf}
+          height="500px"
+          theme="dark"
+          extensions={[xml()]}
+          onChange={(val) => setXccdf(val)}
+        />
+        {xccdfSaveStatus && (
+          <p className="mt-2 text-blue-600 font-medium">{xccdfSaveStatus}</p>
+        )}
       </Modal>
     </div>
   );

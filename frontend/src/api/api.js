@@ -151,3 +151,36 @@ export async function processRegex(benchmark) {
   }
   return res.json();
 }
+
+
+export async function getXccdf(benchmark, ruleId) {
+  const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/rules/${ruleId}/xccdf`);
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  return { xccdf: text }; // wrap it in an object so the rest of your code works
+}
+
+export async function getRulesByObject(benchmark, objectName) {
+  const res = await fetch(
+    `/api/benchmarks/${benchmark}/rules/test/${objectName}`
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}
+
+
+export async function saveXccdf(benchmark, ruleId, xccdfContent) {
+  const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/rules/${ruleId}/xccdf`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ xccdf: xccdfContent }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json();
+}

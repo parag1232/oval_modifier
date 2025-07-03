@@ -1,29 +1,40 @@
 # backend/main.py
 
-from fastapi import FastAPI, UploadFile, BackgroundTasks, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse, FileResponse
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    BackgroundTasks,
+    Form,
+    HTTPException,
+    Request,
+    Depends,
+    Query,
+)
+from fastapi.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+    FileResponse,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from collections import defaultdict
-import shutil
+from lxml import etree as ET
+from cryptography.fernet import Fernet
 import os
+import re
+import shutil
 import json
 import io
 from backend.oval_parser import OvalDSA
+from backend.xccdf_parser import XccdfDSA
 from backend.oval_analyzer import OvalAnalyzer
-from lxml import etree as ET
 from backend.disa_stig import parse_stig, generate_sensor_for_rule, parse_cis_stig
 from backend.database import init_db, SessionLocal
-from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost,VCIResult
-from fastapi import Depends
-from cryptography.fernet import Fernet
+from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost, VCIResult
 from backend.vci_executor import *
-from fastapi import BackgroundTasks
 from backend.genai_regex_replacer import call_genai_api
-from backend.models import UnsupportedRegex, Benchmark
-from backend.database import SessionLocal
 
 app = FastAPI()
 
@@ -407,6 +418,42 @@ async def save_rule_oval(benchmark: str, rule_id: str, request: Request):
 
 
 
+@app.post("/api/benchmarks/{benchmark}/rules/{rule_id}/xccdf")
+async def save_rule_xccdf(benchmark: str, rule_id: str, request: Request):
+    data = await request.json()
+    xccdf_content = data.get("xccdf")
+
+    if xccdf_content is None:
+        raise HTTPException(status_code=400, detail="Missing xccdf content")
+
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id
+    ).first()
+
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    # Path for saving XCCDF
+    rule_id = re.sub(r'_\d+$', '', rule_id)  # remove any suffix like _1, _2, etc.
+    benchmark_dir = f"data/{benchmark}"
+    xccdf_dir = os.path.join(benchmark_dir, "xccdf")
+    os.makedirs(xccdf_dir, exist_ok=True)
+
+    xccdf_path = os.path.join(xccdf_dir, f"{rule_id}.xml")
+
+    with open(xccdf_path, "w", encoding="utf-8") as f:
+        f.write(xccdf_content)
+
+    return JSONResponse({"message": "XCCDF saved successfully"})
+
+
+
 
 
 class RemoteHostRequest(BaseModel):
@@ -568,4 +615,181 @@ async def process_regexes_ai(benchmark: str, background_tasks: BackgroundTasks):
         "message": f"Started GenAI regex conversion task for benchmark {benchmark}"
     }
 
+@app.get("/api/benchmarks/{benchmark}/rules/test/{object_type}")
+async def get_rules_by_object(benchmark: str,object_type: str):
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+    print(benchmark_obj.name)
 
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    # Filter rules where object_type contains the search string
+    rules = session.query(Rule).filter(
+        Rule.benchmark_id == benchmark_obj.id,
+        Rule.excluded == 0,
+        Rule.object_type.isnot(None),
+        Rule.object_type.ilike(f"%{object_type}%")
+    ).all()
+
+    session.close()
+
+    return [
+        {
+            "rule_id": r.rule_id,
+            "definition_id": r.definition_id,
+            "object_type": r.object_type,
+            "supported": bool(r.supported) if r.supported is not None else False,
+            "sensor_file_generated": bool(r.sensor_file_generated) if r.sensor_file_generated is not None else False,
+        }
+        for r in rules
+    ]
+
+@app.get("/api/benchmarks/{benchmark}/rules/{rule_id}/xccdf")
+async def serve_existing_rule_xccdf(benchmark: str, rule_id: str):
+    session = SessionLocal()
+    # rule_id = re.sub(r'_\d+$', '', rule_id)  # remove any suffix like _1, _2, etc.
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id,
+        excluded=0
+    ).first()
+    rule_id = re.sub(r'_\d+$', '', rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found in DB")
+
+    # Path to edited XCCDF file (rule-specific)
+    benchmark_dir = f"data/{benchmark}"
+    xccdf_path = os.path.join(benchmark_dir, "xccdf", f"{rule_id}.xml")
+
+    if not os.path.exists(xccdf_path):
+        # fallback: extract on-the-fly from master XCCDF
+        master_xccdf_path = os.path.join(benchmark_dir, "xccdf.xml")
+        if not os.path.exists(master_xccdf_path):
+            raise HTTPException(status_code=404, detail="Master XCCDF file not found")
+
+        from backend.xccdf_parser import XccdfDSA
+
+        with open(master_xccdf_path, "rb") as f:
+            xccdf_bytes = f.read()
+
+        dsa = XccdfDSA(xccdf_bytes)
+        try:
+            rule_xml_bytes = dsa.extract_rule(rule_id)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found in master XCCDF: {str(e)}")
+
+        # save extracted rule for future access
+        # os.makedirs(os.path.dirname(xccdf_path), exist_ok=True)
+        # with open(xccdf_path, "wb") as f:
+        #     f.write(rule_xml_bytes)
+
+    return FileResponse(
+        xccdf_path,
+        media_type="application/xml",
+        filename=os.path.basename(xccdf_path)
+    )
+
+
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
+import io
+import os
+from lxml import etree as ET
+from backend.models import Benchmark, Rule
+from backend.database import SessionLocal
+from fastapi import Body
+
+class GenerateXccdfRequest(BaseModel):
+    rule_ids: list[str]
+
+def merge_edited_xccdfs(master_path, edited_paths):
+    parser = ET.XMLParser(remove_blank_text=True)
+    master_tree = ET.parse(master_path, parser)
+    master_root = master_tree.getroot()
+
+    NAMESPACE_XCCDF = "http://checklists.nist.gov/xccdf/1.2"
+    NAMESPACES = {"xccdf": NAMESPACE_XCCDF}
+
+    master_rules = {
+        el.attrib["id"]: el
+        for el in master_root.xpath(".//xccdf:Rule", namespaces=NAMESPACES)
+    }
+    master_vars = {
+        el.attrib["id"]: el
+        for el in master_root.xpath(".//xccdf:Value", namespaces=NAMESPACES)
+    }
+
+    for path in edited_paths:
+        edited_tree = ET.parse(path, parser)
+        edited_root = edited_tree.getroot()
+
+        # Merge variables
+        for var_elem in edited_root.xpath(".//xccdf:Value", namespaces=NAMESPACES):
+            var_id = var_elem.attrib.get("id")
+            if not var_id:
+                continue
+            if var_id in master_vars:
+                old_var = master_vars[var_id]
+                parent = old_var.getparent()
+                parent.replace(old_var, var_elem)
+            else:
+                master_root.append(var_elem)
+
+        # Merge rules
+        for rule_elem in edited_root.xpath(".//xccdf:Rule", namespaces=NAMESPACES):
+            rule_id = rule_elem.attrib.get("id")
+            if not rule_id:
+                continue
+            if rule_id in master_rules:
+                old_rule = master_rules[rule_id]
+                parent = old_rule.getparent()
+                parent.replace(old_rule, rule_elem)
+            else:
+                master_root.append(rule_elem)
+
+    return master_tree
+
+@app.post("/api/benchmarks/{benchmark}/generate-xccdf")
+async def generate_and_download_xccdf(benchmark: str, request: GenerateXccdfRequest):
+    rule_ids = request.rule_ids
+    if not rule_ids:
+        raise HTTPException(status_code=400, detail="No rule IDs provided")
+
+    benchmark_dir = f"data/{benchmark}"
+    xccdf_dir = os.path.join(benchmark_dir, "xccdf")
+
+    edited_files = []
+    for rule_id in rule_ids:
+        xccdf_path = os.path.join(xccdf_dir, f"{rule_id}.xml")
+        if os.path.exists(xccdf_path):
+            edited_files.append(xccdf_path)
+
+    if not edited_files:
+        raise HTTPException(status_code=404, detail="No edited XCCDF files found for the requested rules.")
+
+    master_xccdf_path = os.path.join(benchmark_dir, "xccdf.xml")
+    if not os.path.exists(master_xccdf_path):
+        raise HTTPException(status_code=404, detail="Master XCCDF file not found.")
+
+    merged_tree = merge_edited_xccdfs(master_xccdf_path, edited_files)
+
+    output_bytes = ET.tostring(
+        merged_tree.getroot(),
+        pretty_print=True,
+        encoding="UTF-8",
+        xml_declaration=True
+    )
+
+    return StreamingResponse(
+        io.BytesIO(output_bytes),
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f"attachment; filename={benchmark}_merged_xccdf.xml"
+        }
+    )

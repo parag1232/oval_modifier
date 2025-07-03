@@ -24,8 +24,10 @@ class Rule(Base):
     rule_id = Column(String, nullable=False)
     definition_id = Column(String)
     oval_path = Column(String)
+    xccdf_path = Column(String)
     supported = Column(Integer)
     unsupported_probes = Column(Text)
+    object_type = Column(String)
     manual = Column(Integer)
     excluded = Column(Integer, default=0)
     sensor_file_generated = Column(Integer, default=0)
@@ -45,7 +47,6 @@ class RemoteHost(Base):
     username = Column(String)
     password_encrypted = Column(String)
     os_type = Column(String)
-
     benchmark = relationship("Benchmark", back_populates="remote_hosts")
 
 
@@ -55,7 +56,6 @@ class VCIResult(Base):
     id = Column(Integer, primary_key=True)
     rule_id = Column(Integer, ForeignKey("rules.id"))
     json_output = Column(Text)
-
     rule = relationship("Rule", back_populates="vci_results")
 
 

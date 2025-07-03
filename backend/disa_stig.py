@@ -8,10 +8,12 @@ from backend.sensorbin_generator import *
 from datetime import datetime
 from backend.database import SessionLocal
 from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost, VCIResult
+from backend.xccdf_parser import XccdfDSA
+import re
 
 PYTHON_PATH = os.getenv("PYTHON_PATH")
 BUILD_CHANNEL_FILE = os.getenv("BUILD_CHANNEL_FILE")
-GENERATE_INSTRUCTIONS = os.getenv("GENERATE_INSTRUCTIONS_LOCATION")
+GENERATE_INSTRUCTIONS = os.getenv("GENERATE_INSTRUCTIONS_LOCATION_PROJ")
 REQUEST_PARAM = os.getenv("REQUEST_PARAM_FILE_LOCATION")
 
 NAMESPACES = {
@@ -127,17 +129,25 @@ def process_rules(
     benchmark_name,
     benchmark_type,
     benchmark_dir,
-    ben_platform
+    ben_platform,
+    xccdf_bytes
 ):
     session = SessionLocal()
     benchmark_obj = session.query(Benchmark).filter_by(name=benchmark_name).first()
 
     ovals_dir = os.path.join(benchmark_dir, "ovals")
+    xccdf_dir = os.path.join(benchmark_dir, "xccdf")
     os.makedirs(ovals_dir, exist_ok=True)
+    os.makedirs(xccdf_dir, exist_ok=True)
     generated_rules = []
 
     for rule_id, definition_id in xccdf_to_oval_def.items():
         try:
+            rule_id_without_suffix = re.sub(r'_\d+$', '', rule_id)
+            xccdf_dsa = XccdfDSA(xccdf_bytes)
+            xccdf_tree = lxml_etree.ElementTree(xccdf_dsa.extract_rule(rule_id_without_suffix))
+            out_path_xccdf = os.path.join(xccdf_dir, f"{rule_id_without_suffix}.xml")
+            xccdf_tree.write(out_path_xccdf, pretty_print=True, encoding="utf-8", xml_declaration=True)
             if "sce/" in definition_id:
                 print(f"⚠ Skipping SCE rule: {rule_id}")
                 continue
@@ -145,12 +155,21 @@ def process_rules(
                 continue
 
             temp_dsa = OvalDSA(oval_bytes)
+            xccdf_dsa = XccdfDSA(xccdf_bytes)
+            
             temp_dsa.keep_only_definition(definition_id)
             tree = lxml_etree.ElementTree(temp_dsa.to_lxml_element())
+            
+            
+            
             out_path = os.path.join(ovals_dir, f"{rule_id}.xml")
+            
             tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
+            
 
             analyzer = OvalAnalyzer(temp_dsa)
+            object_types = analyzer._extract_object_types(definition_id)
+            print(object_types)
             analysis_results = analyzer.analyze(ben_platform)
             regex_results = analyzer.analyze_regex()
 
@@ -162,6 +181,8 @@ def process_rules(
                 rule_id=rule_id,
                 definition_id=definition_id,
                 oval_path=out_path,
+                xccdf_path=out_path_xccdf,
+                object_type = ",".join(object_types),
                 supported=1 if rule_supported else 0,
                 unsupported_probes=None if rule_supported else json.dumps(unsupported_probes),
                 manual=False,
@@ -260,6 +281,10 @@ def parse_stig(file_path, benchmark_dir, benchmark_name, benchmark_type):
     with open(oval_file_path, "rb") as f:
         oval_bytes = f.read()
 
+    xccdf_path = os.path.join(benchmark_dir, "xccdf.xml")
+    with open(xccdf_path, "rb") as f:
+        xccdf_bytes = f.read()    
+
     ben_platform = detect_benchmark_type_from_roots(xccdf_root, oval_root)
 
     return process_rules(
@@ -268,7 +293,8 @@ def parse_stig(file_path, benchmark_dir, benchmark_name, benchmark_type):
         benchmark_name,
         benchmark_type,
         benchmark_dir,
-        ben_platform
+        ben_platform,
+        xccdf_bytes
     )
 
 def parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name,benchmark_type):
@@ -299,6 +325,9 @@ def parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name,benchmar
     with open(oval_path, "rb") as f:
         oval_bytes = f.read()
 
+    with open(xccdf_path, "rb") as f:
+        xccdf_bytes = f.read()
+
     ben_platform = detect_benchmark_type_from_roots(xccdf_root, oval_root)
 
     return process_rules(
@@ -307,5 +336,6 @@ def parse_cis_stig(xccdf_path, oval_path, benchmark_dir, benchmark_name,benchmar
         benchmark_name,
         benchmark_type,
         benchmark_dir,
-        ben_platform
+        ben_platform,
+        xccdf_bytes
     )
