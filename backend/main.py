@@ -793,3 +793,42 @@ async def generate_and_download_xccdf(benchmark: str, request: GenerateXccdfRequ
             "Content-Disposition": f"attachment; filename={benchmark}_merged_xccdf.xml"
         }
     )
+
+
+from backend.oval_transformer import transform_userright_oval
+
+@app.get("/api/benchmarks/{benchmark}/rules/{rule_id}/transform-userright")
+async def transform_userright(benchmark: str, rule_id: str):
+    session = SessionLocal()
+    benchmark_obj = session.query(Benchmark).filter_by(name=benchmark).first()
+
+    if not benchmark_obj:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+
+    rule = session.query(Rule).filter_by(
+        benchmark_id=benchmark_obj.id,
+        rule_id=rule_id,
+        excluded=0
+    ).first()
+
+    if not rule or not rule.oval_path:
+        raise HTTPException(status_code=404, detail="Oval file not found in DB")
+
+    oval_path = rule.oval_path
+    if not os.path.exists(oval_path):
+        raise HTTPException(status_code=404, detail="Oval file not found on disk")
+
+    with open(oval_path, "rb") as f:
+        oval_bytes = f.read()
+
+    # Only transform if object_type includes userright_object
+    if rule.object_type and "userright_object" not in rule.object_type:
+        return JSONResponse({"message": "Rule does not use userright_object. No transformation needed."})
+
+    transformed_bytes = transform_userright_oval(oval_bytes)
+
+    return StreamingResponse(
+        io.BytesIO(transformed_bytes),
+        media_type="application/xml",
+        headers={"Content-Disposition": f"attachment; filename={rule_id}_transformed.xml"}
+    )

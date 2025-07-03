@@ -97,6 +97,14 @@ class OvalDSA:
                 self.reverse_refs[state_id].add(obj_id)
                 self._process_state(state_id)
 
+        for var_elem in obj_elem.xpath(".//*[@var_ref]"):
+            var_id = var_elem.attrib.get("var_ref")
+            if var_id and var_id in self.element_by_id:
+                if var_id not in self.nodes:
+                    self.nodes[var_id] = GraphNode(var_id, "variable", self.element_by_id[var_id])
+                self.nodes[obj_id].children.add(var_id)
+                self.reverse_refs[var_id].add(obj_id)        
+
         # Also handle <filter> directly on object
         for filter_elem in obj_elem.xpath(".//*[local-name()='filter']"):
             state_id = filter_elem.text.strip()

@@ -12,7 +12,8 @@ import {
   evaluateRules,
   getXccdf,
   saveXccdf,
-  getRulesByObject, // ✅ NEW
+  getRulesByObject,
+  transformUserRight,
 } from "../api/api";
 
 import CodeMirror from "@uiw/react-codemirror";
@@ -60,7 +61,7 @@ function RuleBrowserPage() {
   const { benchmark } = useParams();
   const [rules, setRules] = useState([]);
   const [search, setSearch] = useState("");
-  const [objectSearch, setObjectSearch] = useState(""); // ✅ NEW
+  const [objectSearch, setObjectSearch] = useState("");
   const [selectedRule, setSelectedRule] = useState("");
   const [oval, setOval] = useState("");
   const [xccdf, setXccdf] = useState("");
@@ -77,6 +78,9 @@ function RuleBrowserPage() {
   const [xccdfSaveStatus, setXccdfSaveStatus] = useState("");
 
   const [remoteHostExists, setRemoteHostExists] = useState(false);
+
+  const [transformModalOpen, setTransformModalOpen] = useState(false);
+  const [transformedXml, setTransformedXml] = useState("");
 
   const navigate = useNavigate();
 
@@ -174,6 +178,44 @@ function RuleBrowserPage() {
     }
   };
 
+  const handleTransformUserRight = async (ruleId) => {
+    try {
+      const res = await transformUserRight(benchmark, ruleId);
+      const formatted = beautify.html(res.transformed || "", {
+        indent_size: 2,
+        wrap_line_length: 120,
+        unformatted: [],
+      });
+      setSelectedRule(ruleId);
+      setTransformedXml(formatted);
+      setTransformModalOpen(true);
+    } catch (err) {
+      alert("Failed to fetch transformed XML: " + err.message);
+    }
+  };
+
+  const handleViewHostState = async (ruleId) => {
+    try {
+      const res = await getHostState(benchmark, ruleId);
+      const formatted = JSON.stringify(res.hoststate_json, null, 2);
+      setSelectedHostStateRule(ruleId);
+      setHostStateContent(formatted);
+      setHostStateModalOpen(true);
+    } catch (err) {
+      alert("Failed to fetch host state: " + err.message);
+    }
+  };
+
+  const handleEvaluateRules = async () => {
+    try {
+      await evaluateRules(benchmark);
+      alert("✅ Rules evaluated successfully!");
+      fetchRules();
+    } catch (err) {
+      alert("❌ Failed to evaluate rules: " + err.message);
+    }
+  };
+
   const handleSelect = (ruleId, index, event) => {
     if (event.shiftKey && lastSelectedIndex !== null) {
       const start = Math.min(lastSelectedIndex, index);
@@ -237,28 +279,6 @@ function RuleBrowserPage() {
     }
   };
 
-  const handleViewHostState = async (ruleId) => {
-    try {
-      const res = await getHostState(benchmark, ruleId);
-      const formatted = JSON.stringify(res.hoststate_json, null, 2);
-      setSelectedHostStateRule(ruleId);
-      setHostStateContent(formatted);
-      setHostStateModalOpen(true);
-    } catch (err) {
-      alert("Failed to fetch host state: " + err.message);
-    }
-  };
-
-  const handleEvaluateRules = async () => {
-    try {
-      await evaluateRules(benchmark);
-      alert("✅ Rules evaluated successfully!");
-      fetchRules();
-    } catch (err) {
-      alert("❌ Failed to evaluate rules: " + err.message);
-    }
-  };
-
   return (
     <div className="max-w-7xl mx-auto p-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -290,7 +310,6 @@ function RuleBrowserPage() {
             onChange={(e) => setSearch(e.target.value)}
             className="border border-gray-300 rounded-md px-4 py-2 w-full md:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          {/* ✅ NEW - Object filter */}
           <div className="flex gap-2 w-full md:w-auto">
             <input
               type="text"
@@ -337,7 +356,7 @@ function RuleBrowserPage() {
           <thead className="bg-gray-50">
             <tr>
               <th></th>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+              <th className="px-40 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                 Rule ID
               </th>
               <th
@@ -430,6 +449,12 @@ function RuleBrowserPage() {
                   >
                     View XCCDF
                   </button>
+                  <button
+                    className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded-md text-sm font-semibold"
+                    onClick={() => handleTransformUserRight(rule.rule_id)}
+                  >
+                    Process OVAL
+                  </button>
                 </td>
               </tr>
             ))}
@@ -487,6 +512,23 @@ function RuleBrowserPage() {
         {xccdfSaveStatus && (
           <p className="mt-2 text-blue-600 font-medium">{xccdfSaveStatus}</p>
         )}
+      </Modal>
+
+      <Modal
+        open={transformModalOpen}
+        onClose={() => {
+          setTransformModalOpen(false);
+          setSelectedRule("");
+        }}
+        title={`Transformed OVAL for ${selectedRule}`}
+      >
+        <CodeMirror
+          value={transformedXml}
+          height="500px"
+          theme="dark"
+          extensions={[xml()]}
+          onChange={(val) => setTransformedXml(val)}
+        />
       </Modal>
     </div>
   );

@@ -170,6 +170,15 @@ export async function getRulesByObject(benchmark, objectName) {
   return res.json();
 }
 
+export async function transformUserRight(benchmark, ruleId) {
+  const res = await fetch(
+    `/api/benchmarks/${benchmark}/rules/${ruleId}/transform-userright`
+  );
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  return { transformed: text };
+}
+
 
 export async function saveXccdf(benchmark, ruleId, xccdfContent) {
   const res = await fetch(`${BASE_URL}/benchmarks/${benchmark}/rules/${ruleId}/xccdf`, {
