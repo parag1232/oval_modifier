@@ -143,11 +143,20 @@ def process_rules(
 
     for rule_id, definition_id in xccdf_to_oval_def.items():
         try:
-            rule_id_without_suffix = re.sub(r'_\d+$', '', rule_id)
+            
             xccdf_dsa = XccdfDSA(xccdf_bytes)
-            xccdf_tree = lxml_etree.ElementTree(xccdf_dsa.extract_rule(rule_id_without_suffix))
-            out_path_xccdf = os.path.join(xccdf_dir, f"{rule_id_without_suffix}.xml")
-            xccdf_tree.write(out_path_xccdf, pretty_print=True, encoding="utf-8", xml_declaration=True)
+            rule_id_try = rule_id
+            rule_elem = xccdf_dsa.rules_by_id.get(rule_id_try)
+
+            if rule_elem is None and re.search(r'_\d+$', rule_id):
+                rule_id_try = re.sub(r'_\d+$', '', rule_id)
+                rule_elem = xccdf_dsa.rules_by_id.get(rule_id_try)
+
+            if rule_elem is None:
+                raise Exception(f"Rule {rule_id} or {rule_id_try} not found in XCCDF.")
+            xccdf_tree = lxml_etree.ElementTree(xccdf_dsa.extract_rule(rule_id_try))
+            out_path_xccdf = os.path.join(xccdf_dir, f"{rule_id}.xml")
+            xccdf_tree.write(out_path_xccdf, pretty_print=True, encoding="utf-8", xml_declaration=True)    
             if "sce/" in definition_id:
                 print(f"⚠ Skipping SCE rule: {rule_id}")
                 continue
