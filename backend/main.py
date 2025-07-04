@@ -828,9 +828,21 @@ async def transform_userright(benchmark: str, rule_id: str):
         return JSONResponse({"message": "Rule does not use userright_object. No transformation needed."})
 
     transformed_bytes = transform_userright_oval(oval_bytes)
+    if transformed_bytes is None:
+        return JSONResponse({"message": "Rule does not use userright_states. No transformation needed."})
 
     return StreamingResponse(
         io.BytesIO(transformed_bytes),
         media_type="application/xml",
         headers={"Content-Disposition": f"attachment; filename={rule_id}_transformed.xml"}
     )
+
+from fastapi import BackgroundTasks
+from backend.userright_transformer import run_userright_transformation
+
+@app.post("/api/benchmarks/{benchmark}/transform-userright")
+async def transform_userright_all(benchmark: str, background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_userright_transformation, benchmark)
+    return {
+        "message": f"Started userright transformation task for benchmark {benchmark}."
+    }

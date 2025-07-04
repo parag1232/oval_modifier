@@ -48,6 +48,8 @@ def transform_userright_oval(oval_bytes):
 
     # === Rename states and transform trustee_sid → trustee_name ===
     states = root.xpath(".//*[substring(local-name(), string-length(local-name()) - 5) = '_state']")
+    if len(states) == 0:
+        return None
     variable_ids = []
     for idx, state in enumerate(states, start=1):
         old_state_id = state.attrib.get("id")
