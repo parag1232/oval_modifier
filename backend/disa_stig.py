@@ -10,6 +10,7 @@ from backend.database import SessionLocal
 from backend.models import Benchmark, Rule, UnsupportedRegex, RemoteHost, VCIResult
 from backend.xccdf_parser import XccdfDSA
 import re
+from backend.utils import safe_rule_filename, load_filename_map, save_filename_map
 
 PYTHON_PATH = os.getenv("PYTHON_PATH")
 BUILD_CHANNEL_FILE = os.getenv("BUILD_CHANNEL_FILE")
@@ -140,10 +141,12 @@ def process_rules(
     os.makedirs(ovals_dir, exist_ok=True)
     os.makedirs(xccdf_dir, exist_ok=True)
     generated_rules = []
+    xccdf_filename_map = load_filename_map(xccdf_dir, "xccdf_rule_filename_map.json")
+    oval_filename_map = load_filename_map(ovals_dir, "oval_rule_filename_map.json")
 
     for rule_id, definition_id in xccdf_to_oval_def.items():
         try:
-            
+
             xccdf_dsa = XccdfDSA(xccdf_bytes)
             rule_id_try = rule_id
             rule_elem = xccdf_dsa.rules_by_id.get(rule_id_try)
@@ -154,9 +157,17 @@ def process_rules(
 
             if rule_elem is None:
                 raise Exception(f"Rule {rule_id} or {rule_id_try} not found in XCCDF.")
+
             xccdf_tree = lxml_etree.ElementTree(xccdf_dsa.extract_rule(rule_id_try))
-            out_path_xccdf = os.path.join(xccdf_dir, f"{rule_id}.xml")
-            xccdf_tree.write(out_path_xccdf, pretty_print=True, encoding="utf-8", xml_declaration=True)    
+
+            # NEW: generate safe hashed filename
+            safe_filename = safe_rule_filename(rule_id_try)
+
+            out_path_xccdf = os.path.join(xccdf_dir, safe_filename)
+            xccdf_tree.write(out_path_xccdf, pretty_print=True, encoding="utf-8", xml_declaration=True)
+
+            # store mapping for this rule
+            xccdf_filename_map[rule_id_try] = safe_filename   
             if "sce/" in definition_id:
                 print(f"⚠ Skipping SCE rule: {rule_id}")
                 continue
@@ -164,16 +175,12 @@ def process_rules(
                 continue
 
             temp_dsa = OvalDSA(oval_bytes)
-            xccdf_dsa = XccdfDSA(xccdf_bytes)
-            
             temp_dsa.keep_only_definition(definition_id)
             tree = lxml_etree.ElementTree(temp_dsa.to_lxml_element())
-            
-            
-            
-            out_path = os.path.join(ovals_dir, f"{rule_id}.xml")
-            
+            safe_filename = safe_rule_filename(rule_id)
+            out_path = os.path.join(ovals_dir, safe_filename)
             tree.write(out_path, pretty_print=True, encoding="utf-8", xml_declaration=True)
+            oval_filename_map[rule_id] = safe_filename
             
 
             analyzer = OvalAnalyzer(temp_dsa)
@@ -220,7 +227,8 @@ def process_rules(
         except Exception as e:
             print(f"⚠ Failed to extract OVAL for rule {rule_id}: {e}")
             continue
-
+    save_filename_map(xccdf_dir, "xccdf_rule_filename_map.json", xccdf_filename_map)
+    save_filename_map(ovals_dir, "oval_rule_filename_map.json", oval_filename_map)
     session.close()
     return generated_rules
 

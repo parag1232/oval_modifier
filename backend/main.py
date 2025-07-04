@@ -16,6 +16,7 @@ from fastapi.responses import (
     StreamingResponse,
     FileResponse,
 )
+from backend.utils import *
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -293,7 +294,7 @@ async def generate_and_download_oval(benchmark: str, request: GenerateOvalsReque
 
     oval_files = []
     for rule_id in rule_ids:
-        oval_path = os.path.join(ovals_dir, f"{rule_id}.xml")
+        oval_path = get_hashed_path(rule_id, ovals_dir, "oval_rule_filename_map.json")
         if os.path.exists(oval_path):
             oval_files.append(oval_path)
 
@@ -445,7 +446,7 @@ async def save_rule_xccdf(benchmark: str, rule_id: str, request: Request):
     xccdf_dir = os.path.join(benchmark_dir, "xccdf")
     os.makedirs(xccdf_dir, exist_ok=True)
 
-    xccdf_path = os.path.join(xccdf_dir, f"{rule_id}.xml")
+    xccdf_path = get_hashed_path(rule_id, os.path.join(benchmark_dir, "xccdf"), "xccdf_rule_filename_map.json")
 
     with open(xccdf_path, "w", encoding="utf-8") as f:
         f.write(xccdf_content)
@@ -665,7 +666,8 @@ async def serve_existing_rule_xccdf(benchmark: str, rule_id: str):
 
     # Path to edited XCCDF file (rule-specific)
     benchmark_dir = f"data/{benchmark}"
-    xccdf_path = os.path.join(benchmark_dir, "xccdf", f"{rule_id}.xml")
+    xccdf_path = get_hashed_path(rule_id, os.path.join(benchmark_dir, "xccdf"), "xccdf_rule_filename_map.json")
+    # xccdf_path = os.path.join(benchmark_dir, "xccdf", f"{rule_id}.xml")
 
     if not os.path.exists(xccdf_path):
         # fallback: extract on-the-fly from master XCCDF
